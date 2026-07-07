@@ -22,7 +22,7 @@ jobs:
     name: integrity
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Ensure PyYAML
         run: python3 -m pip install --quiet --disable-pip-version-check pyyaml || true
