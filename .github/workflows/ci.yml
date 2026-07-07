@@ -1,0 +1,109 @@
+name: CI (reusable)
+
+# Reusable standardized CI for template-derived repos: Biome, type-check, unit
+# tests, build, and (optionally) a schema/migration guard. Call it with:
+#
+#   jobs:
+#     ci:
+#       uses: kornsour/gh-automation/.github/workflows/ci.yml@main
+#       with:
+#         migration-check: true   # set false for repos with no src/db/schema.ts
+#
+# Resulting required-check contexts are prefixed by the caller job name, e.g.
+# "ci / Lint & format (Biome)", "ci / Build", "ci / DB migration check".
+
+on:
+  workflow_call:
+    inputs:
+      migration-check:
+        description: "Require a drizzle migration when src/db/schema.ts changes"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  SKIP_ENV_VALIDATION: "1"
+
+jobs:
+  check:
+    name: Lint & format (Biome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  typecheck:
+    name: Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+
+  test:
+    name: Unit tests (Vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    env:
+      # Placeholders so module-load code (auth/db clients) doesn't trip during
+      # build; SKIP_ENV_VALIDATION (workflow-level) bypasses env validation.
+      DATABASE_URL: "postgresql://user:pass@localhost:5432/build"
+      BETTER_AUTH_SECRET: "ci-build-placeholder-secret-not-used-at-runtime"
+      NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+  migration-check:
+    name: DB migration check
+    if: ${{ inputs.migration-check && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a migration when schema.ts changes
+        env:
+          BASE: origin/${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "${BASE}...HEAD")"
+          if ! grep -qx "src/db/schema.ts" <<<"$changed"; then
+            echo "✓ src/db/schema.ts unchanged — no migration required."; exit 0
+          fi
+          if grep -q "^drizzle/" <<<"$changed"; then
+            echo "✓ schema changed and a drizzle/ migration was added."; exit 0
+          fi
+          echo "::error::src/db/schema.ts changed but no drizzle/ migration added. Run: pnpm db:generate --name <name>"
+          exit 1
