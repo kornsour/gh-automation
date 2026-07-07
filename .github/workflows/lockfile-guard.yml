@@ -1,0 +1,61 @@
+name: Lockfile guard (reusable)
+
+# Reusable workflow: rejects duplicate-key pnpm-lock.yaml corruption (the
+# recurring Dependabot break that passes pnpm-10 install but jams Dependabot's
+# parser). Self-contained — checks out the calling repo and validates its
+# lockfile. Passes (skips) when the repo has no pnpm-lock.yaml. Call it with:
+#
+#   jobs:
+#     lockfile:
+#       uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@main
+#
+# The resulting required-check context is "lockfile / integrity".
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  integrity:
+    name: integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure PyYAML
+        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml || true
+
+      - name: Check pnpm-lock.yaml for duplicate keys
+        run: |
+          set -euo pipefail
+          if [ ! -f pnpm-lock.yaml ]; then
+            echo "No pnpm-lock.yaml — nothing to check."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import sys
+          import yaml
+
+          class DupChecker(yaml.SafeLoader):
+              pass
+
+          _orig = DupChecker.construct_mapping
+
+          def construct_mapping(self, node, deep=False):
+              seen = set()
+              for key_node, _ in node.value:
+                  key = self.construct_object(key_node, deep=deep)
+                  if key in seen:
+                      print(f"::error::duplicate key in pnpm-lock.yaml: {key!r}")
+                      sys.exit(1)
+                  seen.add(key)
+              return _orig(self, node, deep=deep)
+
+          DupChecker.construct_mapping = construct_mapping
+
+          with open("pnpm-lock.yaml") as f:
+              yaml.load(f, Loader=DupChecker)
+          print("pnpm-lock.yaml: no duplicate keys")
+          PY

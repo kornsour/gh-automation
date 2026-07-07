@@ -1,0 +1,47 @@
+name: Dependabot auto-merge (reusable)
+
+# Reusable workflow: auto-merges Dependabot patch/minor PRs once the calling
+# repo's required status checks pass. Call it from a repo with:
+#
+#   jobs:
+#     automerge:
+#       uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@main
+#       secrets: inherit
+#
+# Majors are left for manual review. See kornsour/gh-automation/README.md.
+
+on:
+  workflow_call:
+    inputs:
+      merge-method:
+        description: "merge | squash | rebase"
+        type: string
+        default: squash
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for patch & minor
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --${{ inputs.merge-method }} "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Note majors left for manual review
+        if: steps.meta.outputs.update-type == 'version-update:semver-major'
+        run: echo "Major update (${{ steps.meta.outputs.dependency-names }}) — manual review."
