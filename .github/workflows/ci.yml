@@ -33,7 +33,7 @@ env:
 jobs:
   check:
     name: Lint & format (Biome)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -46,7 +46,7 @@ jobs:
 
   typecheck:
     name: Type check
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -59,7 +59,7 @@ jobs:
 
   test:
     name: Unit tests (Vitest)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -72,7 +72,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
     env:
       # Placeholders so module-load code (auth/db clients) doesn't trip during
       # build; SKIP_ENV_VALIDATION (workflow-level) bypasses env validation.
@@ -92,7 +92,7 @@ jobs:
   migration-check:
     name: DB migration check
     if: ${{ inputs.migration-check && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
         with:
