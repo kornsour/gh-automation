@@ -41,6 +41,32 @@ jobs:
 
 Required-check context: **`lockfile / integrity`**.
 
+### `python-ci.yml`
+Standardized Python CI for `python-template`-derived repos: ruff lint + format
+check, pyright type-check, and pytest — all in **one job** to keep billed
+Actions minutes low. Installs only the given extras (default `dev`), so heavy
+runtime frameworks never download in CI. Call it:
+
+```yaml
+# .github/workflows/ci.yml in a consuming repo
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ci:
+    uses: kornsour/gh-automation/.github/workflows/python-ci.yml@main
+    with:
+      python-version: "3.14"   # optional
+      extras: "dev"            # optional
+```
+
+Required-check context: **`ci / Lint, type-check & test`**.
+
 ## Per-repo pieces (not centralizable on a personal account)
 
 A reusable workflow centralizes the *logic*, but each consuming repo still needs,

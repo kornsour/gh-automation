@@ -1,0 +1,62 @@
+name: Python CI (reusable)
+
+# Reusable standardized CI for Python template-derived repos. Runs ruff lint +
+# format check, pyright type-check, and pytest in a SINGLE job to minimize
+# billed Actions minutes (one runner, one dependency install — cheaper than a
+# job-per-check fan-out). Call it with:
+#
+#   jobs:
+#     ci:
+#       uses: kornsour/gh-automation/.github/workflows/python-ci.yml@main
+#       with:
+#         python-version: "3.14"   # optional
+#         extras: "dev"            # optional PEP 508 extras to install
+#
+# Only the given extras are installed (default: dev), so heavy runtime
+# frameworks (torch/jax/...) never download in CI. Resulting required-check
+# context: "ci / Lint, type-check & test".
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version"
+        type: string
+        default: "3.14"
+      extras:
+        description: "Optional-dependency extras to install (comma-separated)"
+        type: string
+        default: "dev"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, type-check & test
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install (given extras only — no heavy runtime frameworks)
+        run: uv pip install --system -e ".[${{ inputs.extras }}]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Type check (pyright)
+        run: pyright
+
+      - name: Tests (pytest)
+        run: pytest
