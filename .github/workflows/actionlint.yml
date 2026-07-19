@@ -1,12 +1,21 @@
 name: Lint workflows
 
 # This repo's entire product is workflow files, so actionlint is the check that
-# actually matters here: it validates expression syntax, job/needs wiring, action
-# refs, and shell usage inside `run:` steps.
+# matters here: it validates expression syntax, job/needs wiring, action refs,
+# and shell usage inside `run:` steps.
 #
-# actionlint is installed machine-wide on the self-hosted runner (see
-# C:\actions-runners\provision-runner-toolchain.ps1) with a pinned, checksum-
-# verified binary, rather than curl-piping an installer into bash on every run.
+# DELIBERATELY GitHub-hosted, not self-hosted.
+#
+# This repository is PUBLIC, and `pull_request` runs the code from the PR. On a
+# self-hosted runner that is arbitrary code execution on the host machine, which
+# is why GitHub advises against pairing self-hosted runners with public repos.
+# Public repos also get unlimited free GitHub-hosted minutes, so there is nothing
+# to save by moving it - and this way the check still works when the runner box
+# is powered off.
+#
+# actionlint is downloaded at a pinned version and checksum-verified rather than
+# pulled through a third-party action, so the only trust here is the release
+# artifact itself.
 
 on:
   pull_request:
@@ -25,21 +34,27 @@ defaults:
   run:
     shell: bash
 
+env:
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+
 jobs:
   actionlint:
     name: actionlint
-    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Verify actionlint is available
-        # Fail loudly with a pointer rather than a bare "command not found" if the
-        # runner has not been provisioned.
+      - name: Install actionlint
         run: |
-          if ! command -v actionlint >/dev/null 2>&1; then
-            echo "::error::actionlint not on PATH. Run C:\\actions-runners\\provision-runner-toolchain.ps1 on the runner host."
-            exit 1
-          fi
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          rm -f "$archive" actionlint
           actionlint --version
 
       - name: Run actionlint
