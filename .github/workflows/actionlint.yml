@@ -1,0 +1,46 @@
+name: Lint workflows
+
+# This repo's entire product is workflow files, so actionlint is the check that
+# actually matters here: it validates expression syntax, job/needs wiring, action
+# refs, and shell usage inside `run:` steps.
+#
+# actionlint is installed machine-wide on the self-hosted runner (see
+# C:\actions-runners\provision-runner-toolchain.ps1) with a pinned, checksum-
+# verified binary, rather than curl-piping an installer into bash on every run.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify actionlint is available
+        # Fail loudly with a pointer rather than a bare "command not found" if the
+        # runner has not been provisioned.
+        run: |
+          if ! command -v actionlint >/dev/null 2>&1; then
+            echo "::error::actionlint not on PATH. Run C:\\actions-runners\\provision-runner-toolchain.ps1 on the runner host."
+            exit 1
+          fi
+          actionlint --version
+
+      - name: Run actionlint
+        run: actionlint -color

@@ -17,6 +17,13 @@ on:
 permissions:
   contents: read
 
+# The duplicate-key check is a bash heredoc feeding a python3 script. Windows
+# runners default to PowerShell, which cannot parse it, so pin the shell
+# workflow-wide. No-op on ubuntu-latest, where bash is already the default.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   integrity:
     name: integrity
