@@ -27,6 +27,13 @@ on:
 permissions:
   contents: read
 
+# `run:` steps here are written in bash (heredocs, <<<, grep, set -euo pipefail).
+# Windows runners default to PowerShell, which cannot parse any of it, so pin the
+# shell workflow-wide. No-op on ubuntu-latest, where bash is already the default.
+defaults:
+  run:
+    shell: bash
+
 env:
   SKIP_ENV_VALIDATION: "1"
 
