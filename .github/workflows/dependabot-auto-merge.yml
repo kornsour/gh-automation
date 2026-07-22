@@ -22,10 +22,14 @@ permissions:
   contents: write
   pull-requests: write
 
+# Self-hosted runners are opt-in via the caller's USE_SELF_HOSTED_RUNNER repo
+# var, and additionally gated to private repos: on a public repo a fork PR
+# could run arbitrary code on the runner, so public callers always get
+# GitHub-hosted regardless of the var.
 jobs:
   auto-merge:
     if: github.actor == 'dependabot[bot]'
-    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}
     steps:
       - name: Fetch Dependabot metadata
         id: meta
