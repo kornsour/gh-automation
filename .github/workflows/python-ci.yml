@@ -11,6 +11,7 @@ name: Python CI (reusable)
 #       with:
 #         python-version: "3.14"   # optional
 #         extras: "dev"            # optional PEP 508 extras to install
+#         validate-opentofu: true   # optional IaC syntax/provider validation
 #
 # Only the given extras are installed (default: dev), so heavy runtime
 # frameworks (torch/jax/...) never download in CI. Resulting required-check
@@ -27,6 +28,14 @@ on:
         description: "Optional-dependency extras to install (comma-separated)"
         type: string
         default: "dev"
+      validate-opentofu:
+        description: "Run OpenTofu init (without backend) and validate"
+        type: boolean
+        default: false
+      opentofu-directory:
+        description: "Directory holding the OpenTofu configuration"
+        type: string
+        default: "infra"
 
 permissions:
   contents: read
@@ -64,3 +73,20 @@ jobs:
 
       - name: Tests (pytest)
         run: pytest
+
+  opentofu:
+    if: inputs.validate-opentofu
+    name: IaC validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: opentofu/setup-opentofu@v1
+
+      - name: Initialize providers without state backend
+        working-directory: ${{ inputs.opentofu-directory }}
+        run: tofu init -backend=false
+
+      - name: Validate configuration
+        working-directory: ${{ inputs.opentofu-directory }}
+        run: tofu validate
