@@ -23,6 +23,10 @@ on:
         description: "Node.js version"
         type: string
         default: "24"
+      security-scan:
+        description: "Run the Semgrep security scan job"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -122,3 +126,64 @@ jobs:
           fi
           echo "::error::src/db/schema.ts changed but no drizzle/ migration added. Run: pnpm db:generate --name <name>"
           exit 1
+
+  security:
+    name: Security scan (Semgrep)
+    if: ${{ inputs.security-scan }}
+    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install Semgrep
+        # Pinned: an unpinned scanner turns a rules release into a surprise
+        # red build on an unrelated PR. Bump deliberately.
+        run: pip install --disable-pip-version-check --quiet semgrep==1.172.0
+      - name: Scan
+        # `|| true` because semgrep exits 1 on any finding; the gate below
+        # decides what is blocking. A real crash still surfaces as missing
+        # JSON, which the next step reports.
+        run: |
+          semgrep scan \
+            --config=p/typescript \
+            --config=p/react \
+            --config=p/secrets \
+            --config=p/owasp-top-ten \
+            --metrics=off \
+            --quiet \
+            --json \
+            --output=semgrep.json \
+            --exclude=node_modules \
+            --exclude=.next \
+            --exclude=dist \
+            --exclude=build \
+            || true
+      - name: Report and gate
+        # ERROR severity blocks; WARNING/INFO are reported only. These repos
+        # carry a standing warning backlog, so gating on everything would mean
+        # a permanently red CI that nobody reads.
+        run: |
+          set -euo pipefail
+          if [ ! -s semgrep.json ]; then
+            echo "::error::Semgrep produced no output — the scan itself failed."
+            exit 1
+          fi
+          errors=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep.json)
+          {
+            echo "### Semgrep"
+            echo
+            echo "| Severity | Count |"
+            echo "| --- | --- |"
+            jq -r '[.results[].extra.severity] | group_by(.)
+                   | map("| \(.[0]) | \(length) |") | .[]' semgrep.json
+            echo
+            echo "_ERROR blocks the build; WARNING and INFO are advisory._"
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.results[] | select(.extra.severity == "ERROR")
+                 | "::error file=\(.path),line=\(.start.line)::\(.extra.message | split("\n")[0])"' semgrep.json
+          if [ "$errors" -gt 0 ]; then
+            echo "Blocking: $errors ERROR-severity finding(s)."
+            exit 1
+          fi
+          echo "No ERROR-severity findings."
