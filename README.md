@@ -20,8 +20,13 @@ permissions:
 jobs:
   automerge:
     uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@main
-    secrets: inherit
 ```
+
+Do **not** pass `secrets: inherit`. This workflow declares no `secrets:` in its
+`workflow_call` and uses only `secrets.GITHUB_TOKEN`, which GitHub provides to
+called workflows automatically. Inheriting would hand it every secret in the
+calling repo for no benefit — and the Semgrep step in `ci.yml` flags it as an
+ERROR-severity finding, which blocks the caller's build.
 
 ### `lockfile-guard.yml`
 Rejects duplicate-key `pnpm-lock.yaml` corruption. Self-contained; passes when

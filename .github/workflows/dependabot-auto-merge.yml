@@ -6,7 +6,9 @@ name: Dependabot auto-merge (reusable)
 #   jobs:
 #     automerge:
 #       uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@main
-#       secrets: inherit
+#
+# Do not pass `secrets: inherit`. This workflow declares no `secrets:` below and
+# uses only `secrets.GITHUB_TOKEN`, which GitHub provides automatically.
 #
 # Majors are left for manual review. See kornsour/gh-automation/README.md.
 
