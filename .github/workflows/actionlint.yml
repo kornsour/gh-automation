@@ -41,7 +41,7 @@ env:
 jobs:
   actionlint:
     name: actionlint
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -53,9 +53,14 @@ jobs:
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
           echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
           tar -xzf "$archive" actionlint
-          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          # Installed under RUNNER_TEMP, not /usr/local/bin: the self-hosted
+          # runners deliberately have no passwordless sudo, so `sudo install`
+          # fails there with "a password is required".
+          mkdir -p "${RUNNER_TEMP}/bin"
+          install -m 0755 actionlint "${RUNNER_TEMP}/bin/actionlint"
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
           rm -f "$archive" actionlint
-          actionlint --version
+          "${RUNNER_TEMP}/bin/actionlint" --version
 
       - name: Run actionlint
         run: actionlint -color
