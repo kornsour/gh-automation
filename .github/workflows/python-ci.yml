@@ -7,7 +7,7 @@ name: Python CI (reusable)
 #
 #   jobs:
 #     ci:
-#       uses: kornsour/gh-automation/.github/workflows/python-ci.yml@main
+#       uses: kornsour/gh-automation/.github/workflows/python-ci.yml@v1
 #       with:
 #         python-version: "3.14"   # optional
 #         extras: "dev"            # optional PEP 508 extras to install

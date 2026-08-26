@@ -32,6 +32,8 @@
 #   --checks <csv>         Required status-check contexts, comma-separated
 #                          (default: "ci,lockfile / integrity")
 #   --ruleset-name <name>  Ruleset name (default: "main")
+#   --ref <ref>            gh-automation ref the caller files pin to
+#                          (default: "v1"; see README's Versioning section)
 #   --no-files             Skip writing files; only apply repo settings
 #   --dry-run              Print what would happen; make no changes
 #   -h, --help             Show this help
@@ -41,6 +43,7 @@ set -euo pipefail
 RULESET_NAME="main"
 CHECKS_CSV="ci,lockfile / integrity"
 REPO=""
+REF="v1"
 WRITE_FILES=1
 DRY_RUN=0
 
@@ -51,6 +54,7 @@ while [ $# -gt 0 ]; do
 		--repo) REPO="${2:?}"; shift 2 ;;
 		--checks) CHECKS_CSV="${2:?}"; shift 2 ;;
 		--ruleset-name) RULESET_NAME="${2:?}"; shift 2 ;;
+		--ref) REF="${2:?}"; shift 2 ;;
 		--no-files) WRITE_FILES=0; shift ;;
 		--dry-run) DRY_RUN=1; shift ;;
 		-h|--help) usage; exit 0 ;;
@@ -68,6 +72,7 @@ fi
 
 echo "Onboarding $REPO"
 echo "  required checks: $CHECKS_CSV"
+echo "  gh-automation ref: $REF"
 [ "$DRY_RUN" -eq 1 ] && echo "  (dry run — no changes will be made)"
 
 run() { if [ "$DRY_RUN" -eq 1 ]; then echo "  would run: $*"; else "$@"; fi; }
@@ -92,7 +97,7 @@ write_if_absent() {
 }
 
 if [ "$WRITE_FILES" -eq 1 ]; then
-	write_if_absent .github/workflows/dependabot-auto-merge.yml <<'YAML'
+	write_if_absent .github/workflows/dependabot-auto-merge.yml <<YAML
 name: Dependabot auto-merge
 on:
   pull_request:
@@ -101,11 +106,10 @@ permissions:
   pull-requests: write
 jobs:
   automerge:
-    uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@main
-    secrets: inherit
+    uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@$REF
 YAML
 
-	write_if_absent .github/workflows/lockfile.yml <<'YAML'
+	write_if_absent .github/workflows/lockfile.yml <<YAML
 name: Lockfile
 on:
   pull_request:
@@ -113,7 +117,7 @@ on:
     branches: [main]
 jobs:
   lockfile:
-    uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@main
+    uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@$REF
 YAML
 
 	# dependabot.yml: detect the repo's ecosystems so the config is useful out of
