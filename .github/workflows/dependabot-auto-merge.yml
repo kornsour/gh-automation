@@ -40,7 +40,7 @@ jobs:
         # up a commit-message prefix (e.g. "build(deps-dev): update ruff
         # requirement..."), which silently skips auto-merge even for safe
         # patch/minor bumps. Fixed in v3.1.0: dependabot/fetch-metadata#704.
-        uses: dependabot/fetch-metadata@v3
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
