@@ -7,7 +7,7 @@ name: Lockfile guard (reusable)
 #
 #   jobs:
 #     lockfile:
-#       uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@main
+#       uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@v1
 #
 # The resulting required-check context is "lockfile / integrity".
 
