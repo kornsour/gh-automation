@@ -35,7 +35,12 @@ jobs:
     steps:
       - name: Fetch Dependabot metadata
         id: meta
-        uses: dependabot/fetch-metadata@v2
+        # v2 (through 2.5.0) has a regex bug that returns `update-type: null`
+        # for pip "update X requirement from A to B" PRs once the title picks
+        # up a commit-message prefix (e.g. "build(deps-dev): update ruff
+        # requirement..."), which silently skips auto-merge even for safe
+        # patch/minor bumps. Fixed in v3.1.0: dependabot/fetch-metadata#704.
+        uses: dependabot/fetch-metadata@v3
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
