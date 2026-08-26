@@ -55,7 +55,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '' || 'pnpm' }}
+          cache: ${{ (vars.USE_SELF_HOSTED_RUNNER != 'true' || !github.event.repository.private) && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
 
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '' || 'pnpm' }}
+          cache: ${{ (vars.USE_SELF_HOSTED_RUNNER != 'true' || !github.event.repository.private) && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit
 
@@ -81,7 +81,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '' || 'pnpm' }}
+          cache: ${{ (vars.USE_SELF_HOSTED_RUNNER != 'true' || !github.event.repository.private) && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
 
@@ -100,7 +100,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '' || 'pnpm' }}
+          cache: ${{ (vars.USE_SELF_HOSTED_RUNNER != 'true' || !github.event.repository.private) && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
