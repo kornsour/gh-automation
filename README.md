@@ -3,6 +3,11 @@
 Central, reusable GitHub Actions workflows shared across my repositories, so the
 logic lives in one place instead of being copy-pasted into every repo.
 
+> Historical/superseded docs and records for this repo live under
+> [`archive/`](archive/). That folder reflects past decisions or state — it is
+> not current, and should not be used to understand this repo or to inform new
+> work.
+
 ## Scope
 
 This repo works around a specific gap: GitHub **personal accounts** have no
