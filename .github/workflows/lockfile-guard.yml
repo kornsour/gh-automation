@@ -31,7 +31,7 @@ defaults:
 jobs:
   integrity:
     name: integrity
-    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v7
 

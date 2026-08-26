@@ -47,7 +47,7 @@ permissions:
 jobs:
   quality:
     name: Lint, type-check & test
-    runs-on: ${{ vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v5
 
@@ -77,7 +77,7 @@ jobs:
   opentofu:
     if: inputs.validate-opentofu
     name: IaC validate
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v5
 
