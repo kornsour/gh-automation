@@ -16,6 +16,13 @@ name: Python CI (reusable)
 # Only the given extras are installed (default: dev), so heavy runtime
 # frameworks (torch/jax/...) never download in CI. Resulting required-check
 # context: "ci / Lint, type-check & test".
+#
+# Installs via `uv sync --frozen`, not `uv pip install`: a committed uv.lock
+# is only worth anything if CI actually installs what it pins rather than
+# re-resolving from the project's `>=` ranges every run. `--frozen` refuses
+# to touch the lockfile at all, so a stale lock fails loudly here (the
+# "Lockfile up to date" step below) instead of installing silently-different
+# versions from what a contributor tested locally.
 
 on:
   workflow_call:
@@ -59,20 +66,32 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
+      - name: Lockfile up to date
+        run: uv lock --check
+
       - name: Install (given extras only — no heavy runtime frameworks)
-        run: uv pip install --system -e ".[${{ inputs.extras }}]"
+        # --frozen: install exactly what uv.lock pins, never re-resolve.
+        # One --extra flag per comma-separated name (uv sync doesn't accept
+        # uv pip install's "a,b" single-flag form).
+        run: |
+          extras=()
+          IFS=',' read -ra names <<< "${{ inputs.extras }}"
+          for name in "${names[@]}"; do
+            extras+=(--extra "$name")
+          done
+          uv sync --frozen "${extras[@]}"
 
       - name: Lint (ruff)
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Format check (ruff)
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
       - name: Type check (pyright)
-        run: pyright
+        run: uv run pyright
 
       - name: Tests (pytest)
-        run: pytest
+        run: uv run pytest
 
   opentofu:
     if: inputs.validate-opentofu
