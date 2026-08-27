@@ -99,22 +99,39 @@ write_if_absent() {
 if [ "$WRITE_FILES" -eq 1 ]; then
 	write_if_absent .github/workflows/dependabot-auto-merge.yml <<YAML
 name: Dependabot auto-merge
+
 on:
   pull_request:
+
 permissions:
   contents: write
   pull-requests: write
+
 jobs:
   automerge:
+    # No \`secrets: inherit\` — it would hand the called workflow every secret in
+    # this repo, not just the ones it needs. The reusable workflow declares no
+    # \`secrets:\` in its \`workflow_call\` and uses only \`secrets.GITHUB_TOKEN\`,
+    # which GitHub provides to called workflows automatically.
     uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@$REF
 YAML
 
 	write_if_absent .github/workflows/lockfile.yml <<YAML
 name: Lockfile
+
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: \${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lockfile:
     uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@$REF
