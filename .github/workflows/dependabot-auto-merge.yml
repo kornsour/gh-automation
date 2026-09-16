@@ -1,7 +1,7 @@
 name: Dependabot auto-merge (reusable)
 
-# Reusable workflow: auto-merges Dependabot patch/minor PRs once the calling
-# repo's required status checks pass. Call it from a repo with:
+# Reusable workflow: auto-merges Dependabot PRs -- patch, minor and major --
+# once the calling repo's required status checks pass. Call it from a repo with:
 #
 #   jobs:
 #     automerge:
@@ -28,7 +28,8 @@ name: Dependabot auto-merge (reusable)
 #
 # Do not pass `secrets: inherit`; pass AUTOMERGE_TOKEN by name.
 #
-# Majors are left for manual review unless `merge-majors: true`.
+# Green CI is the whole gate, majors included. Set `merge-majors: false` to
+# hold semver-major updates for manual review instead.
 # See kornsour/gh-automation/README.md.
 
 on:
@@ -39,9 +40,9 @@ on:
         type: string
         default: squash
       merge-majors:
-        description: "Also auto-merge semver-major updates (default: leave majors for manual review)"
+        description: "Auto-merge semver-major updates too (set false to hold majors for manual review)"
         type: boolean
-        default: false
+        default: true
       require-token:
         description: "Fail rather than fall back to GITHUB_TOKEN when AUTOMERGE_TOKEN is not provided"
         type: boolean

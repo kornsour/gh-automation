@@ -71,9 +71,9 @@ Required-check contexts: **`ci / Lint & format (Biome)`**, **`ci / Type check`**
 check`** when `migration-check: true`.
 
 ### `dependabot-auto-merge.yml`
-Auto-merges Dependabot **patch/minor** PRs once the calling repo's required
-status checks pass; majors are left for manual review unless the caller opts in
-with `merge-majors: true`. Call it:
+Auto-merges Dependabot PRs — patch, minor **and major** — once the calling
+repo's required status checks pass: green CI is the whole gate. A caller can
+hold majors for manual review with `merge-majors: false`. Call it:
 
 ```yaml
 # .github/workflows/dependabot-auto-merge.yml in a consuming repo
@@ -88,7 +88,7 @@ jobs:
     uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@v1
     with:
       require-token: true        # fail rather than merge with GITHUB_TOKEN
-      # merge-majors: true       # optional; default leaves majors for review
+      # merge-majors: false      # optional; hold majors for manual review
     secrets:
       AUTOMERGE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
 ```
