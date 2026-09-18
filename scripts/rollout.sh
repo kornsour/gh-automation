@@ -9,8 +9,11 @@
 #   - .github/dependabot.yml
 #   - allow_auto_merge enabled on the repo
 #   - a branch ruleset listing that repo's required status checks
+#   - an AUTOMERGE_TOKEN Dependabot secret (a fine-grained PAT; see README)
 #
-# This script stamps all of those onto a repo. It is safe to re-run: files are
+# This script stamps all of those onto a repo except the secret, which holds a
+# credential only you can mint: create it and run
+#   gh secret set AUTOMERGE_TOKEN --app dependabot -R <owner/repo> It is safe to re-run: files are
 # written only when absent, and the ruleset is created only when one of the same
 # name doesn't already exist.
 #
@@ -109,11 +112,18 @@ permissions:
 
 jobs:
   automerge:
-    # No \`secrets: inherit\` — it would hand the called workflow every secret in
-    # this repo, not just the ones it needs. The reusable workflow declares no
-    # \`secrets:\` in its \`workflow_call\` and uses only \`secrets.GITHUB_TOKEN\`,
-    # which GitHub provides to called workflows automatically.
     uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@$REF
+    with:
+      # Fail rather than fall back to GITHUB_TOKEN: a merge enabled with
+      # GITHUB_TOKEN lands on main without triggering this repo's push
+      # workflows (CI on main, deploys, releases).
+      require-token: true
+    # No \`secrets: inherit\` — pass the one secret by name. AUTOMERGE_TOKEN is a
+    # *Dependabot* secret (Settings > Secrets and variables > Dependabot); this
+    # workflow runs as dependabot[bot], which cannot read Actions secrets.
+    # See kornsour/gh-automation README for the token's permissions.
+    secrets:
+      AUTOMERGE_TOKEN: \${{ secrets.AUTOMERGE_TOKEN }}
 YAML
 
 	write_if_absent .github/workflows/lockfile.yml <<YAML
@@ -244,3 +254,8 @@ fi
 
 echo "Done."
 [ "$WRITE_FILES" -eq 1 ] && echo "Next: commit the .github/ files via a PR (checks run on the PR; auto-merge takes over afterward)."
+if ! gh api "repos/$REPO/dependabot/secrets/AUTOMERGE_TOKEN" >/dev/null 2>&1; then
+	echo "Missing: Dependabot secret AUTOMERGE_TOKEN — the caller fails closed until it exists."
+	echo "  Create a fine-grained PAT (Contents, Pull requests, Workflows: read/write on $REPO), then:"
+	echo "  gh secret set AUTOMERGE_TOKEN --app dependabot -R $REPO"
+fi

@@ -71,8 +71,9 @@ Required-check contexts: **`ci / Lint & format (Biome)`**, **`ci / Type check`**
 check`** when `migration-check: true`.
 
 ### `dependabot-auto-merge.yml`
-Auto-merges Dependabot **patch/minor** PRs once the calling repo's required
-status checks pass; majors are left for manual review. Call it:
+Auto-merges Dependabot PRs — patch, minor **and major** — once the calling
+repo's required status checks pass: green CI is the whole gate. A caller can
+hold majors for manual review with `merge-majors: false`. Call it:
 
 ```yaml
 # .github/workflows/dependabot-auto-merge.yml in a consuming repo
@@ -85,13 +86,44 @@ permissions:
 jobs:
   automerge:
     uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@v1
+    with:
+      require-token: true        # fail rather than merge with GITHUB_TOKEN
+      # merge-majors: false      # optional; hold majors for manual review
+    secrets:
+      AUTOMERGE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
 ```
 
-Do **not** pass `secrets: inherit`. This workflow declares no `secrets:` in its
-`workflow_call` and uses only `secrets.GITHUB_TOKEN`, which GitHub provides to
-called workflows automatically. Inheriting would hand it every secret in the
-calling repo for no benefit — and the Semgrep step in `ci.yml` flags it as an
-ERROR-severity finding, which blocks the caller's build.
+**Which token enables auto-merge decides whether anything runs after the
+merge.** GitHub performs the eventual merge on behalf of whoever enabled
+auto-merge, and events caused by `GITHUB_TOKEN` never start workflow runs. A
+merge enabled with `GITHUB_TOKEN` therefore lands on `main` without triggering
+that repo's `push` workflows: no CI run on `main`, no Pages deploy, no image
+publish, no release. `AUTOMERGE_TOKEN` fixes that by attributing the merge to a
+real identity. One-time setup per consuming repo:
+
+1. Create a **fine-grained personal access token** (Settings → Developer
+   settings → Personal access tokens → Fine-grained) scoped to the consuming
+   repos, with repository permissions **Contents: read and write**, **Pull
+   requests: read and write** and **Workflows: read and write** (needed because
+   Dependabot PRs often edit `.github/workflows/*.yml`). A GitHub App
+   installation token with the same permissions also works.
+2. Store it as a **Dependabot secret** — not an Actions secret. The caller
+   runs as `dependabot[bot]`, which can only read Dependabot secrets:
+
+   ```bash
+   gh secret set AUTOMERGE_TOKEN --app dependabot -R kornsour/<repo>
+   ```
+
+Without the secret the workflow falls back to `GITHUB_TOKEN` and emits a
+warning, so callers that predate it keep merging as before. `require-token:
+true` turns that fallback into a failure, which is the right setting for any
+repo whose `push` workflows matter; `scripts/rollout.sh` writes new callers
+that way.
+
+Do **not** pass `secrets: inherit`; pass `AUTOMERGE_TOKEN` by name. Inheriting
+would hand the called workflow every secret in the calling repo for no benefit
+— and the Semgrep step in `ci.yml` flags it as an ERROR-severity finding, which
+blocks the caller's build.
 
 ### `lockfile-guard.yml`
 Rejects duplicate-key `pnpm-lock.yaml` corruption. Self-contained; passes when
@@ -146,6 +178,8 @@ per GitHub's personal-account model:
   `.github/workflows/lockfile.yml`)
 - `.github/dependabot.yml`
 - `allow_auto_merge` enabled on the repo
+- an `AUTOMERGE_TOKEN` Dependabot secret (see `dependabot-auto-merge.yml`
+  above; the one piece `rollout.sh` cannot do for you)
 - a **repository ruleset** with the required status checks (matched to that
   repo's own CI check names + `lockfile / integrity`)
 
