@@ -126,8 +126,28 @@ would hand the called workflow every secret in the calling repo for no benefit
 blocks the caller's build.
 
 ### `lockfile-guard.yml`
-Rejects duplicate-key `pnpm-lock.yaml` corruption. Self-contained; passes when
-the repo has no `pnpm-lock.yaml`. Call it:
+Proves a repo's lockfile is well-formed and in sync with its manifest.
+Ecosystem-detecting: one workflow serves pnpm, npm and uv repos, and a repo
+with none of those lockfiles passes. Every check runs on whichever lockfiles
+exist:
+
+| Check | Applies to | Fails on |
+| --- | --- | --- |
+| Strict parse | `pnpm-lock.yaml`, `package-lock.json`, `uv.lock` | syntax errors, **duplicate mapping keys**, empty file, git conflict markers |
+| `pnpm install --frozen-lockfile --lockfile-only` | pnpm | `package.json` / lockfile drift, anything pnpm itself calls `ERR_PNPM_BROKEN_LOCKFILE` |
+| `npm ci --dry-run` | npm | `package.json` / `package-lock.json` drift |
+| `uv lock --check` | uv | `pyproject.toml` / `uv.lock` drift |
+
+It is **not skippable for any actor**: there is no `if:` on the actor, so
+`dependabot[bot]` PRs are checked like every other (they are the main source
+of lockfile corruption). On a `pull_request` it also merges the *current* base
+branch tip into the checkout first (`merge-base: true`), because GitHub's
+pre-computed merge ref can be stale — see below. Add no new third-party
+actions: it uses the same pinned `checkout`, `setup-node` and `setup-uv` as the
+other workflows here, plus plain shell and Python.
+
+Call it. Include `push` to the default branch, and `merge_group` if the repo
+uses a merge queue, so the same check runs on the code that actually lands:
 
 ```yaml
 # .github/workflows/lockfile.yml in a consuming repo
@@ -136,12 +156,39 @@ on:
   pull_request:
   push:
     branches: [main]
+  merge_group:        # only if the repo uses a merge queue
 jobs:
   lockfile:
     uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@v1
+    # with:             # all optional; existing callers need none of this
+    #   working-directory: "."   # where the lockfile lives
+    #   ecosystems: auto         # or "pnpm,uv"; a named ecosystem without its lockfile fails
+    #   node-version: "24"
+    #   pnpm-version: ""         # default: package.json packageManager pin, else 10
+    #   merge-base: true
 ```
 
 Required-check context: **`lockfile / integrity`**.
+
+**What the guard cannot do on its own.** Two PRs that each edit
+`pnpm-lock.yaml` can each pass, auto-merge seconds apart, and merge textually
+clean into a lockfile with a duplicated key — each PR was checked against a
+base that did not yet contain the other. (This is what broke
+`kornsour/design-system` on 2026-11-09, PRs #137/#138.) The `merge-base` step
+shrinks that window to seconds; closing it needs the repo's ruleset to set
+**require branches to be up to date before merging** (`strict_required_status_checks_policy`)
+or to use a merge queue. And `push` runs on the default branch only fire for
+merges made with a real identity — see `AUTOMERGE_TOKEN` under
+`dependabot-auto-merge.yml`.
+
+**Self-test.** `tests/lockfile-guard/run-tests.sh` extracts the guard's real
+scripts from the workflow by step id and runs them against fixture projects:
+good pnpm/npm/uv lockfiles must pass; duplicate keys (including the
+design-system shape), YAML/JSON/TOML errors, conflict markers, an empty file
+and manifest drift must each fail the right step. Run it locally (needs
+`python3`; `pnpm`, `npm` and `uv` for their cases, skipped if absent unless
+`REQUIRE_ALL=1`). `lockfile-guard-selftest.yml` runs it in CI whenever the
+guard or its tests change.
 
 ### `python-ci.yml`
 Standardized Python CI for `python-template`-derived repos: ruff lint + format
