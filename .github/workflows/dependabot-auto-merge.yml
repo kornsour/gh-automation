@@ -11,9 +11,10 @@ name: Dependabot auto-merge (reusable)
 #       secrets:
 #         AUTOMERGE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
 #
-# WHICH TOKEN ENABLES AUTO-MERGE MATTERS. GitHub performs the eventual merge on
-# behalf of whoever enabled auto-merge, and events caused by GITHUB_TOKEN never
-# start workflow runs -- so a merge enabled with GITHUB_TOKEN lands on main
+# WHICH TOKEN MERGES MATTERS. This workflow merges with AUTOMERGE_TOKEN if
+# given, else GITHUB_TOKEN (legacy mode: GitHub merges on behalf of whoever
+# enabled auto-merge). Events caused by GITHUB_TOKEN never start workflow
+# runs -- so a merge made or enabled with GITHUB_TOKEN lands on main
 # WITHOUT triggering the caller's push workflows (CI on main, Pages, image
 # publish, deploys, releases). Pass AUTOMERGE_TOKEN -- a fine-grained PAT (or a
 # GitHub App installation token) with Contents, Pull requests and Workflows
@@ -30,6 +31,31 @@ name: Dependabot auto-merge (reusable)
 #
 # Green CI is the whole gate, majors included. Set `merge-majors: false` to
 # hold semver-major updates for manual review instead.
+#
+# THE LOCKFILE MERGE RACE, and how this workflow closes it
+# (recheck-before-merge: true, the default). Two Dependabot PRs that each edit
+# pnpm-lock.yaml can each pass their checks against a base that lacks the
+# other, auto-merge seconds apart, and combine textually clean into a lockfile
+# with a duplicate key (kornsour/design-system #137/#138). So instead of
+# handing the merge to GitHub with `gh pr merge --auto`, this workflow:
+#   1. waits (job `auto-merge`) until the PR's required checks have passed;
+#   2. takes a per-repository lock (job `merge`: a concurrency group keyed on
+#      github.repository, queued, never cancel-in-progress), so only one
+#      Dependabot merge per repo is in flight at a time;
+#   3. inside the lock, fetches the CURRENT base tip, merges the PR head into
+#      it locally and runs the same strict lockfile checks as lockfile-guard
+#      (scripts/lockfile-check/lockfile-check.sh premerge);
+#   4. merges only if that passes -- pinned with --match-head-commit -- and
+#      otherwise comments on the PR why and fails.
+# Cost: the re-check is seconds (a strict parse; no installs, no CI rerun).
+# The wait in step 1 idles a runner while the PR's own CI runs (free minutes
+# on public repos and on the self-hosted fleet).
+#
+# GitHub keeps at most ONE pending run per concurrency group: if three PRs
+# reach step 2 within one merge's few seconds, the older pending one is
+# cancelled and its PR is simply left open (fail-safe). Re-run it or comment
+# `@dependabot rebase`. `recheck-before-merge: false` restores the old
+# `gh pr merge --auto` behaviour (no lock, no re-check).
 # See kornsour/gh-automation/README.md.
 
 on:
@@ -47,6 +73,26 @@ on:
         description: "Fail rather than fall back to GITHUB_TOKEN when AUTOMERGE_TOKEN is not provided"
         type: boolean
         default: false
+      recheck-before-merge:
+        description: "Serialize merges per repo and re-run the strict lockfile checks against the current base tip immediately before merging (closes the lockfile merge race). false = legacy `gh pr merge --auto`."
+        type: boolean
+        default: true
+      working-directory:
+        description: "Directory containing the lockfile(s) for the pre-merge re-check, relative to the repo root"
+        type: string
+        default: "."
+      ecosystems:
+        description: "Ecosystems for the pre-merge re-check: 'auto' or a comma list of pnpm,npm,uv (same meaning as in lockfile-guard.yml)"
+        type: string
+        default: "auto"
+      wait-timeout-minutes:
+        description: "How long to wait for the PR's required checks before giving up (the PR is then left open; re-run to retry)"
+        type: number
+        default: 60
+      tooling-ref:
+        description: "Ref of kornsour/gh-automation to fetch the shared lockfile-check script from. Empty = the ref the caller pinned this workflow to, else v1."
+        type: string
+        default: ""
     secrets:
       AUTOMERGE_TOKEN:
         description: "Token that enables auto-merge, so the merge triggers the caller's push workflows. Store it as a Dependabot secret."
@@ -64,6 +110,12 @@ jobs:
   auto-merge:
     if: github.actor == 'dependabot[bot]'
     runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
+    # A newer push to the same PR supersedes this run's wait.
+    concurrency:
+      group: dependabot-auto-merge-wait-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    outputs:
+      ready: ${{ steps.wait.outputs.ready }}
     steps:
       - name: Fetch Dependabot metadata
         id: meta
@@ -82,8 +134,13 @@ jobs:
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
           DEPENDENCIES: ${{ steps.meta.outputs.dependency-names }}
           MERGE_MAJORS: ${{ inputs.merge-majors }}
+          MERGE_METHOD: ${{ inputs.merge-method }}
         run: |
           set -euo pipefail
+          case "$MERGE_METHOD" in
+            merge|squash|rebase) ;;
+            *) echo "::error::merge-method must be merge, squash or rebase (got '$MERGE_METHOD')"; exit 1 ;;
+          esac
           case "$UPDATE_TYPE" in
             version-update:semver-patch|version-update:semver-minor)
               echo "eligible=true" >> "$GITHUB_OUTPUT" ;;
@@ -99,7 +156,7 @@ jobs:
               echo "eligible=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Resolve the token that will enable auto-merge
+      - name: Resolve the token that will merge
         if: steps.policy.outputs.eligible == 'true'
         env:
           HAVE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN != '' }}
@@ -107,17 +164,189 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$HAVE_TOKEN" = "true" ]; then
-            echo "Enabling auto-merge with AUTOMERGE_TOKEN; the merge will trigger push workflows on main."
+            echo "Merging with AUTOMERGE_TOKEN; the merge will trigger push workflows on main."
           elif [ "$REQUIRE_TOKEN" = "true" ]; then
             echo "::error title=AUTOMERGE_TOKEN is not set::This repo requires a merge token so the Dependabot merge triggers its push workflows. Create a fine-grained PAT (Contents, Pull requests, Workflows: read/write on this repo) and store it as a Dependabot secret: gh secret set AUTOMERGE_TOKEN --app dependabot -R ${GITHUB_REPOSITORY}. See kornsour/gh-automation README."
             exit 1
           else
-            echo "::warning title=Falling back to GITHUB_TOKEN::The resulting merge will NOT trigger this repo's push workflows on main (CI, deploys, releases). Pass AUTOMERGE_TOKEN to fix that; see kornsour/gh-automation README."
+            echo "::warning title=Running with GITHUB_TOKEN (no AUTOMERGE_TOKEN)::This merge is made with GITHUB_TOKEN, so it will NOT trigger this repo's push workflows on main: no CI on main, no deploys or releases, and no push-to-main lockfile backstop. Store a fine-grained PAT or GitHub App token as the Dependabot secret AUTOMERGE_TOKEN; see kornsour/gh-automation README."
           fi
 
+      # Legacy path (recheck-before-merge: false): hand the merge to GitHub.
       - name: Enable auto-merge
-        if: steps.policy.outputs.eligible == 'true'
-        run: gh pr merge --auto --${{ inputs.merge-method }} "$PR_URL"
+        if: steps.policy.outputs.eligible == 'true' && !inputs.recheck-before-merge
+        run: gh pr merge --auto "--${MERGE_METHOD}" "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
+          MERGE_METHOD: ${{ inputs.merge-method }}
           GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Re-check path: wait here (not in the serialized job) until the
+      # required checks are green, then hand over to `merge`.
+      - name: Wait for required checks
+        id: wait
+        if: steps.policy.outputs.eligible == 'true' && inputs.recheck-before-merge
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TIMEOUT_MINUTES: ${{ inputs.wait-timeout-minutes }}
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          # An auto-merge enabled by an older version of this workflow would
+          # let GitHub merge outside the lock, unchecked. Take it back.
+          if [ "$(gh pr view "$PR_URL" --json autoMergeRequest -q '.autoMergeRequest != null')" = true ]; then
+            gh pr merge --disable-auto "$PR_URL"
+            echo "Disabled GitHub auto-merge; this workflow performs the merge itself after a re-check."
+          fi
+          deadline=$((SECONDS + TIMEOUT_MINUTES * 60)); blocked_green=0
+          while :; do
+            state=""
+            IFS=$'\t' read -r state mss head < <(gh pr view "$PR_URL" --json state,mergeStateStatus,headRefOid \
+              -q '[.state, .mergeStateStatus, .headRefOid] | @tsv' || true) || true
+            if [ -z "${state:-}" ]; then  # transient API error: retry until the deadline
+              [ "$SECONDS" -lt "$deadline" ] || { echo "::warning::Could not read the PR; not merging."; exit 0; }
+              sleep "${POLL_SECONDS:-20}"; continue
+            fi
+            [ "$state" = OPEN ] || { echo "PR is $state — nothing to do."; exit 0; }
+            [ "$head" = "$HEAD_SHA" ] || { echo "PR head moved to $head; the run for that push takes over."; exit 0; }
+            case "$mss" in
+              CLEAN|UNSTABLE|HAS_HOOKS)
+                echo "Required checks passed (mergeStateStatus=$mss)."
+                echo "ready=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              DIRTY) echo "::notice::PR has merge conflicts; Dependabot will rebase it and this re-runs."; exit 0 ;;
+              BEHIND) echo "::notice::Branch is behind its base and the ruleset requires it up to date; comment \`@dependabot rebase\`."; exit 0 ;;
+              DRAFT) echo "PR is a draft."; exit 0 ;;
+            esac
+            # BLOCKED / UNKNOWN: look at the required checks themselves. This
+            # can come back empty (no required checks, or a caller whose
+            # `permissions:` block withholds checks: read); then just keep
+            # polling on mergeStateStatus. Deliberately no new permission
+            # here: requesting one the caller does not grant fails the run.
+            checks="$(gh pr checks "$PR_URL" --required --json bucket -q '[.[].bucket] | unique | join(",")' 2>/dev/null || true)"
+            case ",$checks," in
+              *,fail,*|*,cancel,*)
+                echo "::notice::A required check failed; not merging. A new push re-runs this."; exit 0 ;;
+              *,pending,*|,,) blocked_green=0 ;;
+              *)
+                # Required checks green (or none) yet still BLOCKED: reviews,
+                # or another rule. Give mergeStateStatus a few polls to settle.
+                blocked_green=$((blocked_green + 1))
+                if [ "$blocked_green" -ge 4 ]; then
+                  echo "::notice::Blocked by something other than checks (mergeStateStatus=$mss, e.g. a required review); not merging."; exit 0
+                fi ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::Required checks did not finish within ${TIMEOUT_MINUTES} min; not merging. Re-run this workflow to try again."; exit 0
+            fi
+            sleep "${POLL_SECONDS:-20}"
+          done
+
+  merge:
+    needs: auto-merge
+    if: needs.auto-merge.outputs.ready == 'true'
+    runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
+    timeout-minutes: 15
+    # THE LOCK: one Dependabot merge per repository at a time. Queued, never
+    # cancel-in-progress. The key MUST include github.repository: in a reusable
+    # workflow github.workflow / github.ref resolve in the caller, and without
+    # the repo every caller would share one queue.
+    concurrency:
+      group: dependabot-auto-merge-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      # Waiting for the lock can take a while; the PR may have moved on.
+      - name: Confirm the PR is still open at the checked head
+        id: still
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          read -r state head < <(gh pr view "$PR_URL" --json state,headRefOid -q '"\(.state) \(.headRefOid)"')
+          if [ "$state" = OPEN ] && [ "$head" = "$HEAD_SHA" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PR is $state at $head (this run checked $HEAD_SHA) — nothing to do."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.still.outputs.go == 'true'
+        with:
+          # Full history: the re-check merges the PR head into the base tip.
+          fetch-depth: 0
+
+      # BEGIN shared tooling step (kept identical, apart from an `if:` line, in
+      # lockfile-guard.yml and dependabot-auto-merge.yml; run-tests.sh enforces it)
+      # The lockfile checks live in ONE script, scripts/lockfile-check/, in
+      # kornsour/gh-automation. A reusable workflow cannot see its own repo's
+      # files, so fetch them — at the same ref the caller pinned this workflow
+      # to (read from the caller's workflow file), or `tooling-ref` if given,
+      # else v1. Plain git, outside the workspace; no extra action.
+      - name: Fetch gh-automation lockfile tooling
+        id: tooling
+        if: steps.still.outputs.go == 'true'
+        env:
+          TOOLING_REF: ${{ inputs.tooling-ref }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          ref="$TOOLING_REF"
+          caller="${CALLER_WORKFLOW_REF#*/*/}"; caller="${caller%%@*}"
+          if [ -z "$ref" ] && [ -f "$caller" ]; then
+            ref="$(grep -oE 'kornsour/gh-automation/\.github/workflows/[A-Za-z0-9_.-]+@[^[:space:]"#]+' "$caller" | head -n1 | sed 's/.*@//' || true)"
+          fi
+          ref="${ref:-v1}"
+          dir="${RUNNER_TEMP:?}/gh-automation-tooling"
+          rm -rf "$dir" && git init --quiet "$dir"
+          git -C "$dir" fetch --quiet --depth 1 https://github.com/kornsour/gh-automation.git "$ref"
+          git -C "$dir" checkout --quiet --detach FETCH_HEAD
+          script="$dir/scripts/lockfile-check/lockfile-check.sh"
+          [ -x "$script" ] || { echo "::error::gh-automation@$ref has no scripts/lockfile-check; set tooling-ref to a ref that does"; exit 1; }
+          echo "LOCKFILE_CHECK=$script" >> "$GITHUB_ENV"
+          echo "Lockfile tooling: kornsour/gh-automation@$ref ($(git -C "$dir" rev-parse HEAD))"
+      # END shared tooling step
+
+      - name: Re-check lockfiles against the current base tip
+        id: premerge
+        if: steps.still.outputs.go == 'true'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          ECOSYSTEMS: ${{ inputs.ecosystems }}
+        run: |
+          set -euo pipefail
+          "$LOCKFILE_CHECK" premerge --base "$BASE_REF" --head "$HEAD_SHA" \
+            --dir "$WORKING_DIRECTORY" --report "$RUNNER_TEMP/premerge-report.md"
+
+      - name: Merge
+        if: steps.still.outputs.go == 'true'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_METHOD: ${{ inputs.merge-method }}
+          HAVE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN != '' }}
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$HAVE_TOKEN" != true ]; then
+            echo "::warning title=Merging with GITHUB_TOKEN::No AUTOMERGE_TOKEN: this merge will not trigger push workflows on main (CI, deploys, the lockfile backstop)."
+          fi
+          # --match-head-commit: merge exactly the commit that was re-checked.
+          gh pr merge "--${MERGE_METHOD}" --match-head-commit "$HEAD_SHA" "$PR_URL"
+
+      - name: Explain the refusal on the PR
+        if: failure() && steps.premerge.outcome == 'failure'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/premerge-report.md"
+          [ -s "$report" ] || echo "Auto-merge stopped: the pre-merge lockfile re-check failed. See $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >"$report"
+          printf '\n\n[Workflow run](%s/%s/actions/runs/%s)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >>"$report"
+          gh pr comment "$PR_URL" --body-file "$report"
