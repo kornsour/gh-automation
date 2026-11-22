@@ -1,0 +1,123 @@
+name: Auto-merge (reusable)
+
+# Reusable workflow: turns on GitHub auto-merge for every non-draft,
+# same-repository pull request that Dependabot did not open. Call it from a
+# repo with:
+#
+#   # .github/workflows/auto-merge.yml
+#   name: Auto-merge
+#   on:
+#     pull_request:
+#       types: [opened, reopened, ready_for_review]
+#   permissions:
+#     contents: write
+#     pull-requests: write
+#   jobs:
+#     auto-merge:
+#       uses: kornsour/gh-automation/.github/workflows/auto-merge.yml@<sha>
+#       secrets:
+#         AUTOMERGE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
+#
+# Auto-merge is a REQUEST, not a merge: GitHub holds the PR until the default
+# branch's required status checks pass, then merges it. A red check never
+# merges. A repo with NO required checks gets no gate at all -- GitHub refuses
+# to enable auto-merge on a PR with nothing pending ("clean status"), so this
+# job fails there rather than merging instantly. Add required checks first.
+#
+# This is the Lurking-Walrus org's auto-merge-reusable.yml, rehomed here
+# because kornsour's repos are mostly PUBLIC and cannot call a private
+# workflow in another owner's repository. kornsour/portfolio-site inlines the
+# same job for the same reason; it can switch to this file.
+#
+# WHICH TOKEN MERGES MATTERS (see dependabot-auto-merge.yml and the README).
+# GitHub performs an auto-merge as whoever ENABLED it, and events caused by
+# GITHUB_TOKEN start no workflows. So a merge enabled with GITHUB_TOKEN lands
+# on main WITHOUT the caller's push workflows: no CI on main, no deploy, no
+# Pages, no release. Pass AUTOMERGE_TOKEN -- a fine-grained PAT (Contents,
+# Pull requests, Workflows: read/write on the repo) stored as an ACTIONS
+# secret (not a Dependabot one; this runs for human/agent PRs) -- and push
+# workflows run normally.
+#
+# Without the token this falls back to GITHUB_TOKEN and warns. Set
+# `require-token: true` in any repo whose push workflows deploy or publish:
+# a loud failure leaves the PR for a hand merge (which does trigger push
+# workflows); a silent fallback stops the deploys with no signal at all
+# (kornsour/portfolio-site, 2026-09-13).
+
+on:
+  workflow_call:
+    inputs:
+      merge-method:
+        description: "merge | squash | rebase"
+        type: string
+        default: squash
+      require-token:
+        description: "Fail rather than fall back to GITHUB_TOKEN when AUTOMERGE_TOKEN is not provided"
+        type: boolean
+        default: false
+    secrets:
+      AUTOMERGE_TOKEN:
+        required: false
+
+# No workflow-level permissions: the job declares its own below.
+permissions: {}
+
+# Reusable: github.workflow/ref/repository resolve in the CALLER, so the
+# repository is load-bearing in the key. `cancel-in-progress: false` because
+# this can enable a merge; serialize duplicates, never cut one off midway.
+concurrency:
+  group: ${{ github.repository }}-auto-merge-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  enable-auto-merge:
+    timeout-minutes: 10
+    # All three conditions are load-bearing:
+    #   draft == false           a draft is not ready; the caller re-triggers
+    #                            on `ready_for_review`.
+    #   head.repo == this repo   a fork PR must never be auto-merged. On a
+    #                            public repo anyone can open one. This is a
+    #                            security boundary, not a filter.
+    #   author != dependabot     dependabot-auto-merge.yml owns those PRs (lock,
+    #                            lockfile re-check, merge-majors policy). The
+    #                            PR AUTHOR, not github.actor: a human reopening
+    #                            a Dependabot PR must not slip past.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    # Public repos always resolve to ubuntu-latest: a fork PR on a public repo
+    # must never reach the self-hosted fleet.
+    runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
+    # enablePullRequestAutoMerge needs contents: write as well as
+    # pull-requests: write; there is no narrower scope.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check the merge token
+        env:
+          HAVE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN != '' }}
+          REQUIRE_TOKEN: ${{ inputs.require-token }}
+        run: |
+          if [ "$HAVE_TOKEN" = "true" ]; then
+            echo "Enabling auto-merge with AUTOMERGE_TOKEN; the merge will trigger push workflows on main."
+          elif [ "$REQUIRE_TOKEN" = "true" ]; then
+            echo "::error title=AUTOMERGE_TOKEN is not set::This repo's push workflows deploy or publish, so auto-merge needs a token that triggers them. Merge this PR by hand, or add the secret: gh secret set AUTOMERGE_TOKEN -R ${GITHUB_REPOSITORY} (fine-grained PAT: Contents, Pull requests, Workflows read/write). See kornsour/gh-automation README."
+            exit 1
+          else
+            echo "::warning title=Running with GITHUB_TOKEN (no AUTOMERGE_TOKEN)::This PR will merge with GITHUB_TOKEN, so the merge will NOT trigger push workflows on main. Add an AUTOMERGE_TOKEN Actions secret to fix that; see kornsour/gh-automation README."
+          fi
+
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN || github.token }}
+          # Through env, never interpolated into `run:`.
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          MERGE_METHOD: ${{ inputs.merge-method }}
+        run: |
+          case "$MERGE_METHOD" in
+            merge|squash|rebase) ;;
+            *) echo "::error::merge-method must be merge, squash or rebase (got '$MERGE_METHOD')"; exit 1 ;;
+          esac
+          gh pr merge --auto "--$MERGE_METHOD" "$PR_URL"
