@@ -70,6 +70,41 @@ Required-check contexts: **`ci / Lint & format (Biome)`**, **`ci / Type check`**
 **`ci / Unit tests (Vitest)`**, **`ci / Build`** — plus **`ci / DB migration
 check`** when `migration-check: true`.
 
+### `auto-merge.yml`
+Turns on GitHub auto-merge (squash by default) for every non-draft,
+same-repository PR that Dependabot did not open, so a green PR lands without
+anyone clicking Merge. GitHub still holds each PR until the default branch's
+required checks pass, so the repo **must have required checks** — with none,
+GitHub refuses to enable auto-merge rather than merging instantly. Fork PRs are
+never auto-merged. Dependabot PRs are left to `dependabot-auto-merge.yml`.
+
+```yaml
+# .github/workflows/auto-merge.yml in a consuming repo
+name: Auto-merge
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  auto-merge:
+    uses: kornsour/gh-automation/.github/workflows/auto-merge.yml@<sha>
+    with:
+      require-token: true   # set where push workflows deploy or publish
+    secrets:
+      AUTOMERGE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
+```
+
+The repo also needs **Allow auto-merge** and **Always suggest updating pull
+request branches** turned on (`gh api -X PATCH repos/OWNER/REPO -F
+allow_auto_merge=true -F allow_update_branch=true`).
+
+`AUTOMERGE_TOKEN` here is an **Actions** secret (the Dependabot workflow's is a
+Dependabot secret; a repo that wants both stores the PAT twice). Without it the
+merge is made with `GITHUB_TOKEN` and triggers no push workflows on main; with
+`require-token: true` the job fails instead and the PR waits for a hand merge.
+
 ### `dependabot-auto-merge.yml`
 Auto-merges Dependabot PRs — patch, minor **and major** — once the calling
 repo's required status checks pass: green CI is the whole gate. A caller can
