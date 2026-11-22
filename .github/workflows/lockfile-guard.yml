@@ -1,24 +1,64 @@
 name: Lockfile guard (reusable)
 
-# Reusable workflow: rejects duplicate-key pnpm-lock.yaml corruption (the
-# recurring Dependabot break that passes pnpm-10 install but jams Dependabot's
-# parser). Self-contained — checks out the calling repo and validates its
-# lockfile. Passes (skips) when the repo has no pnpm-lock.yaml. Call it with:
+# Reusable workflow: proves the calling repo's lockfile(s) are well-formed and
+# in sync with their manifests, so a corrupted lockfile cannot reach the
+# default branch and then break every later install. Ecosystem-detecting — one
+# workflow serves pnpm, npm and uv repos. Call it with:
 #
+#   on:
+#     pull_request:
+#     push:
+#       branches: [main]
+#     merge_group:            # only if the repo uses a merge queue
 #   jobs:
 #     lockfile:
 #       uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@v1
 #
 # The resulting required-check context is "lockfile / integrity".
+#
+# Checks (each runs only for the lockfiles that exist):
+#   all     a strict parse: syntax errors, DUPLICATE KEYS and git conflict
+#           markers fail (pnpm-lock.yaml, package-lock.json, uv.lock)
+#   pnpm    pnpm install --frozen-lockfile --lockfile-only   (drift + parse)
+#   npm     npm ci --dry-run                                  (drift)
+#   uv      uv lock --check                                   (drift)
+# A repo with none of these lockfiles passes (nothing to check).
+#
+# There is deliberately NO actor condition anywhere: Dependabot PRs are the
+# main source of lockfile corruption and are checked exactly like any other.
+#
+# The run scripts below are exercised by tests/lockfile-guard/run-tests.sh,
+# which extracts them from this file by step id — edit them here, not there.
 
 on:
   workflow_call:
+    inputs:
+      working-directory:
+        description: "Directory containing the lockfile(s), relative to the repo root"
+        type: string
+        default: "."
+      ecosystems:
+        description: "Comma list of pnpm,npm,uv to check, or 'auto' to detect from the lockfiles present. An explicitly named ecosystem whose lockfile is missing fails."
+        type: string
+        default: "auto"
+      node-version:
+        description: "Node.js version used for the pnpm/npm checks"
+        type: string
+        default: "24"
+      pnpm-version:
+        description: "pnpm version for the frozen-lockfile check; empty = the package.json packageManager pin, else 10"
+        type: string
+        default: ""
+      merge-base:
+        description: "On pull_request, merge the CURRENT base branch tip into the checkout before checking, so a lockfile that only breaks in combination with a newer base is caught"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
-# The duplicate-key check is a bash heredoc feeding a python3 script. Windows
-# runners default to PowerShell, which cannot parse it, so pin the shell
+# The scripts below are bash (heredocs, arrays, pipefail). Windows runners
+# default to PowerShell, which cannot parse them, so pin the shell
 # workflow-wide. No-op on ubuntu-latest, where bash is already the default.
 defaults:
   run:
@@ -34,39 +74,272 @@ jobs:
     runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # A PR needs history to merge the current base tip in (next step).
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
 
-      - name: Ensure PyYAML
-        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml || true
-
-      - name: Check pnpm-lock.yaml for duplicate keys
+      # A PR is checked as GitHub's pre-computed merge ref, which can already
+      # be stale: two Dependabot PRs that each touch pnpm-lock.yaml can both
+      # pass, then merge textually clean into a duplicated key. Re-merging the
+      # base tip as it is NOW narrows that window. A conflict only warns —
+      # GitHub will not let a conflicting PR merge anyway.
+      - name: Merge current base branch into the checkout
+        if: ${{ github.event_name == 'pull_request' && inputs.merge-base }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          if [ ! -f pnpm-lock.yaml ]; then
-            echo "No pnpm-lock.yaml — nothing to check."
+          git config user.email "lockfile-guard@users.noreply.github.com"
+          git config user.name "lockfile-guard"
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          if git merge-base --is-ancestor "origin/${BASE_REF}" HEAD; then
+            echo "Checkout already contains origin/${BASE_REF}."
             exit 0
           fi
+          if git merge --no-edit --no-ff "origin/${BASE_REF}"; then
+            echo "Merged current origin/${BASE_REF} into the checkout."
+          else
+            git merge --abort || true
+            echo "::warning::Could not merge origin/${BASE_REF} cleanly; checking the PR merge ref as-is."
+          fi
+
+      - name: Detect lockfiles
+        id: detect
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          ECOSYSTEMS: ${{ inputs.ecosystems }}
+        run: |
+          set -euo pipefail
+          want="${ECOSYSTEMS:-auto}"
+          want="${want// /}"
+          wants() { [ "$want" = auto ] || [[ ",$want," == *",$1,"* ]]; }
+          pnpm=false; npm=false; uv=false
+          wants pnpm && [ -f pnpm-lock.yaml ] && pnpm=true
+          { wants npm && { [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; }; } && npm=true
+          wants uv && [ -f uv.lock ] && uv=true
+          # An explicitly requested ecosystem must have its lockfile.
+          if [ "$want" != auto ]; then
+            for e in ${want//,/ }; do
+              case "$e" in
+                pnpm) [ "$pnpm" = true ] || { echo "::error::ecosystems names pnpm but there is no pnpm-lock.yaml"; exit 1; } ;;
+                npm)  [ "$npm" = true ]  || { echo "::error::ecosystems names npm but there is no package-lock.json"; exit 1; } ;;
+                uv)   [ "$uv" = true ]   || { echo "::error::ecosystems names uv but there is no uv.lock"; exit 1; } ;;
+                *)    echo "::error::unknown ecosystem '$e' (use pnpm, npm, uv or auto)"; exit 1 ;;
+              esac
+            done
+          fi
+          if [ "$pnpm" = true ] && [ "$npm" = true ]; then
+            echo "::warning::both pnpm-lock.yaml and package-lock.json exist; checking both, but one is probably stale."
+          fi
+          if [ "$pnpm" = false ] && [ "$npm" = false ] && [ "$uv" = false ]; then
+            echo "No pnpm-lock.yaml, package-lock.json or uv.lock — nothing to check."
+          fi
+          {
+            echo "pnpm=$pnpm"
+            echo "npm=$npm"
+            echo "uv=$uv"
+            echo "any=$([ "$pnpm$npm$uv" = falsefalsefalse ] && echo false || echo true)"
+            echo "js=$([ "$pnpm" = true ] || [ "$npm" = true ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Detected: pnpm=$pnpm npm=$npm uv=$uv"
+
+      # PyYAML for the strict parse. Installed into a private venv so it works
+      # on runners whose system Python is externally managed (PEP 668), and
+      # with NO `|| true`: if the strict parser cannot be set up, fail closed.
+      - name: Set up strict parser
+        id: parser
+        if: ${{ steps.detect.outputs.any == 'true' }}
+        run: |
+          set -euo pipefail
+          venv="${RUNNER_TEMP:?}/lockfile-guard-venv"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install --quiet --disable-pip-version-check pyyaml
+          echo "$venv/bin" >> "$GITHUB_PATH"
+
+      - name: Strict parse of lockfiles (syntax, duplicate keys, conflict markers)
+        id: strict
+        if: ${{ steps.detect.outputs.any == 'true' }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GUARD_PNPM: ${{ steps.detect.outputs.pnpm }}
+          GUARD_NPM: ${{ steps.detect.outputs.npm }}
+          GUARD_UV: ${{ steps.detect.outputs.uv }}
+        run: |
+          set -euo pipefail
           python3 - <<'PY'
+          import json
+          import os
+          import re
           import sys
+
           import yaml
 
-          class DupChecker(yaml.SafeLoader):
-              pass
+          failed = False
 
-          _orig = DupChecker.construct_mapping
 
-          def construct_mapping(self, node, deep=False):
-              seen = set()
-              for key_node, _ in node.value:
-                  key = self.construct_object(key_node, deep=deep)
-                  if key in seen:
-                      print(f"::error::duplicate key in pnpm-lock.yaml: {key!r}")
-                      sys.exit(1)
-                  seen.add(key)
-              return _orig(self, node, deep=deep)
+          def fail(path, msg):
+              global failed
+              failed = True
+              print(f"::error file={path}::{msg}")
 
-          DupChecker.construct_mapping = construct_mapping
 
-          with open("pnpm-lock.yaml") as f:
-              yaml.load(f, Loader=DupChecker)
-          print("pnpm-lock.yaml: no duplicate keys")
+          def conflict_markers(path, text):
+              for n, line in enumerate(text.splitlines(), 1):
+                  if re.match(r"^(<{7}|>{7})( |$)", line) or line == "=" * 7:
+                      fail(path, f"git conflict marker at line {n}")
+                      return True
+              return False
+
+
+          def key_id(node):
+              if isinstance(node, yaml.ScalarNode):
+                  return (node.tag, node.value)
+              return ("complex", yaml.serialize(node))
+
+
+          def yaml_duplicates(node, trail, seen, out):
+              if id(node) in seen:
+                  return
+              seen.add(id(node))
+              if isinstance(node, yaml.MappingNode):
+                  keys = {}
+                  for k, v in node.value:
+                      if k.tag == "tag:yaml.org,2002:merge":
+                          yaml_duplicates(v, trail, seen, out)
+                          continue
+                      kid = key_id(k)
+                      label = k.value if isinstance(k, yaml.ScalarNode) else "<complex key>"
+                      if kid in keys:
+                          out.append(
+                              f"duplicate mapping key {label!r} at line {k.start_mark.line + 1} "
+                              f"(first at line {keys[kid] + 1}) under {'/'.join(trail) or '<root>'}"
+                          )
+                      else:
+                          keys[kid] = k.start_mark.line
+                      yaml_duplicates(v, trail + [str(label)], seen, out)
+              elif isinstance(node, yaml.SequenceNode):
+                  for i, item in enumerate(node.value):
+                      yaml_duplicates(item, trail + [str(i)], seen, out)
+
+
+          def check_pnpm(path):
+              text = open(path, encoding="utf-8").read()
+              if not text.strip():
+                  return fail(path, "lockfile is empty")
+              if conflict_markers(path, text):
+                  return
+              try:
+                  root = yaml.compose(text, Loader=yaml.SafeLoader)
+                  yaml.safe_load(text)
+              except yaml.YAMLError as e:
+                  return fail(path, f"YAML parse error: {' '.join(str(e).split())}")
+              if root is None:
+                  return fail(path, "lockfile has no content")
+              dups = []
+              yaml_duplicates(root, [], set(), dups)
+              for d in dups:
+                  fail(path, d)
+              if not dups:
+                  print(f"{path}: parses cleanly, no duplicate keys")
+
+
+          def check_json(path):
+              text = open(path, encoding="utf-8").read()
+              if conflict_markers(path, text):
+                  return
+              dups = []
+
+              def hook(pairs):
+                  seen = set()
+                  for k, _ in pairs:
+                      if k in seen:
+                          dups.append(k)
+                      seen.add(k)
+                  return dict(pairs)
+
+              try:
+                  json.loads(text, object_pairs_hook=hook)
+              except ValueError as e:
+                  return fail(path, f"JSON parse error: {e}")
+              for k in dups:
+                  fail(path, f"duplicate object key {k!r}")
+              if not dups:
+                  print(f"{path}: parses cleanly, no duplicate keys")
+
+
+          def check_toml(path):
+              text = open(path, encoding="utf-8").read()
+              if conflict_markers(path, text):
+                  return
+              try:
+                  import tomllib
+              except ImportError:
+                  print(f"::warning file={path}::Python < 3.11 has no tomllib; relying on `uv lock --check` to parse")
+                  return
+              try:
+                  # tomllib rejects duplicate keys and tables outright.
+                  tomllib.loads(text)
+              except tomllib.TOMLDecodeError as e:
+                  return fail(path, f"TOML parse error (includes duplicate keys): {e}")
+              print(f"{path}: parses cleanly, no duplicate keys")
+
+
+          if os.environ.get("GUARD_PNPM") == "true":
+              check_pnpm("pnpm-lock.yaml")
+          if os.environ.get("GUARD_NPM") == "true":
+              for name in ("package-lock.json", "npm-shrinkwrap.json"):
+                  if os.path.isfile(name):
+                      check_json(name)
+          if os.environ.get("GUARD_UV") == "true":
+              check_toml("uv.lock")
+
+          sys.exit(1 if failed else 0)
           PY
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        if: ${{ steps.detect.outputs.js == 'true' }}
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install pnpm
+        id: pnpm-install
+        if: ${{ steps.detect.outputs.pnpm == 'true' }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          PNPM_VERSION: ${{ inputs.pnpm-version }}
+        run: |
+          set -euo pipefail
+          v="$PNPM_VERSION"
+          if [ -z "$v" ] && [ -f package.json ]; then
+            # packageManager looks like "pnpm@10.33.0" or "pnpm@10.33.0+sha512.…"
+            v="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@\([0-9][^"+]*\).*/\1/p' package.json | head -n1)"
+          fi
+          v="${v:-10}"
+          prefix="${RUNNER_TEMP:?}/lockfile-guard-pnpm"
+          npm install --prefix "$prefix" "pnpm@${v}" --no-audit --no-fund --ignore-scripts --loglevel=error
+          echo "$prefix/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "Installed pnpm@${v}"
+
+      # Parses the lockfile with pnpm's own parser AND proves it matches
+      # package.json. --lockfile-only never populates node_modules.
+      - name: pnpm — frozen lockfile
+        id: pnpm-check
+        if: ${{ steps.detect.outputs.pnpm == 'true' }}
+        working-directory: ${{ inputs.working-directory }}
+        run: pnpm install --frozen-lockfile --lockfile-only --ignore-scripts
+
+      - name: npm — lockfile in sync with package.json
+        id: npm-check
+        if: ${{ steps.detect.outputs.npm == 'true' }}
+        working-directory: ${{ inputs.working-directory }}
+        run: npm ci --dry-run --ignore-scripts --no-audit --no-fund
+
+      - name: Install uv
+        if: ${{ steps.detect.outputs.uv == 'true' }}
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
+      - name: uv — lockfile up to date
+        id: uv-check
+        if: ${{ steps.detect.outputs.uv == 'true' }}
+        working-directory: ${{ inputs.working-directory }}
+        run: uv lock --check

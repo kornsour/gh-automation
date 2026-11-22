@@ -1,0 +1,55 @@
+name: Lockfile guard self-test
+
+# Proves the reusable lockfile guard still fails on bad lockfiles: runs
+# tests/lockfile-guard/run-tests.sh, which extracts the guard's real scripts
+# from lockfile-guard.yml and runs them against good and corrupted fixtures
+# (duplicate keys, parse errors, conflict markers, manifest drift for pnpm,
+# npm and uv). Runs on every PR/push that touches the guard or its tests.
+#
+# GitHub-hosted: this repository is public, so a self-hosted runner would run
+# fork-PR code on the host (see actionlint.yml).
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/lockfile-guard.yml"
+      - ".github/workflows/lockfile-guard-selftest.yml"
+      - "tests/lockfile-guard/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/lockfile-guard.yml"
+      - ".github/workflows/lockfile-guard-selftest.yml"
+      - "tests/lockfile-guard/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  selftest:
+    name: selftest
+    runs-on: ${{ fromJSON(vars.USE_SELF_HOSTED_RUNNER == 'true' && github.event.repository.private && '["self-hosted","Linux","X64"]' || '["ubuntu-latest"]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+      - name: Install pnpm
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/pnpm" pnpm@10 --no-audit --no-fund --ignore-scripts --loglevel=error
+          echo "$RUNNER_TEMP/pnpm/node_modules/.bin" >> "$GITHUB_PATH"
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Run guard tests
+        env:
+          REQUIRE_ALL: "1"
+        run: tests/lockfile-guard/run-tests.sh
