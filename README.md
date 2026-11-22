@@ -73,7 +73,11 @@ check`** when `migration-check: true`.
 ### `dependabot-auto-merge.yml`
 Auto-merges Dependabot PRs — patch, minor **and major** — once the calling
 repo's required status checks pass: green CI is the whole gate. A caller can
-hold majors for manual review with `merge-majors: false`. Call it:
+hold majors for manual review with `merge-majors: false`. By default it does
+not hand the merge to GitHub's auto-merge: it waits for the required checks,
+then merges itself under a per-repo lock after re-checking the lockfile
+against the current base — see [The lockfile merge race](#the-lockfile-merge-race).
+Call it:
 
 ```yaml
 # .github/workflows/dependabot-auto-merge.yml in a consuming repo
@@ -89,14 +93,19 @@ jobs:
     with:
       require-token: true        # fail rather than merge with GITHUB_TOKEN
       # merge-majors: false      # optional; hold majors for manual review
+      # recheck-before-merge: true   # default; false = legacy `gh pr merge --auto`
+      # working-directory: "."       # where the lockfile lives (pre-merge re-check)
+      # ecosystems: auto             # as in lockfile-guard.yml
+      # wait-timeout-minutes: 60     # how long to wait for required checks
     secrets:
       AUTOMERGE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
 ```
 
-**Which token enables auto-merge decides whether anything runs after the
-merge.** GitHub performs the eventual merge on behalf of whoever enabled
-auto-merge, and events caused by `GITHUB_TOKEN` never start workflow runs. A
-merge enabled with `GITHUB_TOKEN` therefore lands on `main` without triggering
+**Which token merges decides whether anything runs after the merge.** The
+workflow merges with `AUTOMERGE_TOKEN` when it is set (in legacy mode GitHub
+merges on behalf of whoever enabled auto-merge), and events caused by
+`GITHUB_TOKEN` never start workflow runs. A merge made with `GITHUB_TOKEN`
+therefore lands on `main` without triggering
 that repo's `push` workflows: no CI run on `main`, no Pages deploy, no image
 publish, no release. `AUTOMERGE_TOKEN` fixes that by attributing the merge to a
 real identity. One-time setup per consuming repo:
@@ -114,8 +123,10 @@ real identity. One-time setup per consuming repo:
    gh secret set AUTOMERGE_TOKEN --app dependabot -R kornsour/<repo>
    ```
 
-Without the secret the workflow falls back to `GITHUB_TOKEN` and emits a
-warning, so callers that predate it keep merging as before. `require-token:
+Without the secret the workflow falls back to `GITHUB_TOKEN` and logs a
+warning (`Running with GITHUB_TOKEN (no AUTOMERGE_TOKEN)`, and again at merge
+time), so callers that predate it keep merging as before — but nothing runs
+on `main` afterwards, including the lockfile backstop. `require-token:
 true` turns that fallback into a failure, which is the right setting for any
 repo whose `push` workflows matter; `scripts/rollout.sh` writes new callers
 that way.
@@ -166,29 +177,124 @@ jobs:
     #   node-version: "24"
     #   pnpm-version: ""         # default: package.json packageManager pin, else 10
     #   merge-base: true
+    #   strict-only: false       # true = strict parse only (the push backstop)
+    #   tooling-ref: ""          # default: the ref you pinned this workflow to
 ```
 
 Required-check context: **`lockfile / integrity`**.
 
-**What the guard cannot do on its own.** Two PRs that each edit
-`pnpm-lock.yaml` can each pass, auto-merge seconds apart, and merge textually
-clean into a lockfile with a duplicated key — each PR was checked against a
-base that did not yet contain the other. (This is what broke
-`kornsour/design-system` on 2026-11-09, PRs #137/#138.) The `merge-base` step
-shrinks that window to seconds; closing it needs the repo's ruleset to set
-**require branches to be up to date before merging** (`strict_required_status_checks_policy`)
-or to use a merge queue. And `push` runs on the default branch only fire for
-merges made with a real identity — see `AUTOMERGE_TOKEN` under
-`dependabot-auto-merge.yml`.
+**What the guard cannot do on its own.** A PR check is a snapshot of one base
+commit; it cannot see a PR that merges after it ran. That is the lockfile
+merge race — see [below](#the-lockfile-merge-race) for the two controls that
+close it.
 
-**Self-test.** `tests/lockfile-guard/run-tests.sh` extracts the guard's real
-scripts from the workflow by step id and runs them against fixture projects:
-good pnpm/npm/uv lockfiles must pass; duplicate keys (including the
-design-system shape), YAML/JSON/TOML errors, conflict markers, an empty file
-and manifest drift must each fail the right step. Run it locally (needs
+**Where the checks live.** The detect and strict-parse logic is one script,
+[`scripts/lockfile-check/lockfile-check.sh`](scripts/lockfile-check/lockfile-check.sh)
+(+ `lockfile_strict.py`), used by both this workflow and the auto-merge
+pre-merge re-check. A reusable workflow cannot read its own repo's files, so
+each workflow fetches that script with plain `git` at the ref the caller
+pinned it to (read from the caller's workflow file; full 40-char SHAs, tags
+and branches all work), or at `tooling-ref` if set, else `v1`.
+
+**Self-test.** `tests/lockfile-guard/run-tests.sh` runs the shared script and
+the guard's drift steps (extracted from the workflow by step id) against
+fixture projects: good pnpm/npm/uv lockfiles must pass; duplicate keys
+(including the design-system shape), YAML/JSON/TOML errors, conflict markers,
+an empty file and manifest drift must each fail the right step. It then
+replays the two-PR race against a local git "origin" — two lockfile edits that
+each pass, merge textually clean, and produce a duplicate `tslib@2.9.1` key —
+and asserts the pre-merge re-check refuses the second PR (and a conflicting
+one) with a report, and passes an unrelated one. Last, it checks the
+workflows' wiring: per-repo lock, re-check before merge, the shared script in
+both places. Run it locally (needs
 `python3`; `pnpm`, `npm` and `uv` for their cases, skipped if absent unless
 `REQUIRE_ALL=1`). `lockfile-guard-selftest.yml` runs it in CI whenever the
 guard or its tests change.
+
+### The lockfile merge race
+
+**What happened.** On 2026-11-09, Dependabot PRs #137 and #138 in
+`kornsour/design-system` each edited `pnpm-lock.yaml`. Each passed the lockfile
+guard — against a base that did not yet contain the other. Both auto-merged
+about 35 seconds apart. Git merged the two edits textually clean, and the
+result had a duplicate `tslib@2.9.1` key, which broke every later install and
+CI run. Nothing caught it on `main` either: auto-merge had been enabled with
+`GITHUB_TOKEN`, so the merges started no `push` workflows.
+
+The cause is structural, not a guard bug: a PR's checks describe the PR merged
+into the base *as it was when they ran*. Without "require branches to be up to
+date", GitHub will merge a green PR into a base that has moved since.
+
+**Control 1 — serialize and re-check immediately before merging**
+(`dependabot-auto-merge.yml`, on by default):
+
+1. The `auto-merge` job waits until the PR's required checks have passed.
+2. The `merge` job takes a per-repo lock: `concurrency: dependabot-auto-merge-${{ github.repository }}`,
+   `cancel-in-progress: false`, so Dependabot merges in one repo happen one at
+   a time. (The key includes `github.repository` because inside a reusable
+   workflow `github.workflow`/`github.ref` resolve in the caller.)
+3. Inside the lock it fetches the **current** base tip, merges the PR head
+   into it locally and runs the strict lockfile checks on the result
+   (`lockfile-check.sh premerge`).
+4. Pass: `gh pr merge --match-head-commit <sha>` — exactly the commit checked.
+   Fail (duplicate key, parse error, conflict): no merge, the job fails, and
+   the workflow comments on the PR explaining why; `@dependabot rebase`
+   regenerates the lockfile on top of the new base and the next run re-checks.
+
+The second PR of an #137/#138 pair now waits for the first to merge, sees it in
+the base, and is refused instead of merged. GitHub keeps at most one *pending*
+run per concurrency group, so if three PRs queue within one merge's few
+seconds the oldest pending one is cancelled — its PR just stays open (re-run
+the workflow or `@dependabot rebase`). That is fail-safe: nothing unchecked
+merges. An older version of this workflow may have left GitHub auto-merge
+enabled on open PRs; the new one disables it when it runs, so GitHub cannot
+merge outside the lock.
+
+**Control 2 — a push-to-`main` backstop.** For anything that lands without the
+lock (a human merge, a non-Dependabot PR, a cancelled run that someone merged
+by hand), run only the strict checks on every push to the default branch:
+
+```yaml
+# .github/workflows/lockfile-backstop.yml in a consuming repo
+# (or just add `push: branches: [main]` to the existing lockfile.yml caller)
+name: Lockfile backstop
+on:
+  push:
+    branches: [main]
+jobs:
+  lockfile:
+    uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@v1
+    with:
+      strict-only: true     # strict parse only: seconds, no installs
+```
+
+It turns `main` red the moment a corrupted lockfile lands instead of when the
+next unrelated PR's install fails. **It only runs if the merge was made by a
+real identity**: merges made (or auto-merge enabled) with `GITHUB_TOKEN` start
+no workflows. So the auto-merge caller must pass `AUTOMERGE_TOKEN` — a
+fine-grained PAT or a GitHub App token, stored as a *Dependabot* secret — and
+should set `require-token: true`. Without it the workflow logs a warning on
+every run saying the backstop will not fire.
+
+**Cost.** The pre-merge re-check and the backstop are each a strict parse —
+seconds, no `node_modules`, no CI rerun. The only added wait is the
+`auto-merge` job idling while the PR's own CI runs (free on public repos and on
+the self-hosted fleet). Neither control reruns any PR's full CI.
+
+**Rejected alternatives.**
+
+- *Require branches to be up to date* (`strict_required_status_checks_policy`)
+  closes the race by forcing every PR to be rebased onto the latest base and
+  fully re-run before merge. With N open Dependabot PRs that is O(N²) CI runs —
+  each merge invalidates the other N−1, which must all rebase and rerun — on a
+  week where Dependabot opens a dozen PRs at once. The pre-merge re-check gets
+  the property that matters (the lockfile of *base + PR* is valid) for seconds
+  per merge.
+- *Merge queues* would serialize merges natively, but are not available for
+  private repositories on every plan (historically they needed GitHub
+  Enterprise Cloud) — **check your plan** before relying on one. They also
+  rerun the full required checks per queued PR. If a repo does use one, add
+  `merge_group` to the lockfile-guard caller.
 
 ### `python-ci.yml`
 Standardized Python CI for `python-template`-derived repos: ruff lint + format
@@ -226,7 +332,9 @@ per GitHub's personal-account model:
 - `.github/dependabot.yml`
 - `allow_auto_merge` enabled on the repo
 - an `AUTOMERGE_TOKEN` Dependabot secret (see `dependabot-auto-merge.yml`
-  above; the one piece `rollout.sh` cannot do for you)
+  above; the one piece `rollout.sh` cannot do for you). Check with
+  `gh secret list --app dependabot -R kornsour/<repo>` — it must list
+  `AUTOMERGE_TOKEN` (`gh secret list -R …` alone shows only Actions secrets)
 - a **repository ruleset** with the required status checks (matched to that
   repo's own CI check names + `lockfile / integrity`)
 

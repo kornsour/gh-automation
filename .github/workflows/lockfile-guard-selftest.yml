@@ -1,10 +1,13 @@
 name: Lockfile guard self-test
 
-# Proves the reusable lockfile guard still fails on bad lockfiles: runs
-# tests/lockfile-guard/run-tests.sh, which extracts the guard's real scripts
-# from lockfile-guard.yml and runs them against good and corrupted fixtures
-# (duplicate keys, parse errors, conflict markers, manifest drift for pnpm,
-# npm and uv). Runs on every PR/push that touches the guard or its tests.
+# Proves the lockfile checks still fail on bad lockfiles: runs
+# tests/lockfile-guard/run-tests.sh, which runs the shared script
+# (scripts/lockfile-check/) and the guard's drift steps against good and
+# corrupted fixtures (duplicate keys, parse errors, conflict markers, manifest
+# drift for pnpm, npm and uv), replays the two-PR duplicate-key race through
+# the auto-merge pre-merge re-check, and checks the workflows' wiring. Runs on
+# every PR/push that touches the guard, the auto-merge workflow, the shared
+# script or the tests.
 #
 # GitHub-hosted: this repository is public, so a self-hosted runner would run
 # fork-PR code on the host (see actionlint.yml).
@@ -14,6 +17,8 @@ on:
     paths:
       - ".github/workflows/lockfile-guard.yml"
       - ".github/workflows/lockfile-guard-selftest.yml"
+      - ".github/workflows/dependabot-auto-merge.yml"
+      - "scripts/lockfile-check/**"
       - "tests/lockfile-guard/**"
   push:
     branches:
@@ -21,6 +26,8 @@ on:
     paths:
       - ".github/workflows/lockfile-guard.yml"
       - ".github/workflows/lockfile-guard-selftest.yml"
+      - ".github/workflows/dependabot-auto-merge.yml"
+      - "scripts/lockfile-check/**"
       - "tests/lockfile-guard/**"
 
 concurrency:
