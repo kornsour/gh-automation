@@ -138,6 +138,24 @@ case_ "pnpm: duplicate key (the design-system incident shape) fails the strict p
 grep -q "duplicate" <(run_guard "$d" 2>&1 || true) \
   && { pass=$((pass + 1)); echo "ok    pnpm: failure message names the duplicate key"; } \
   || { fail=$((fail + 1)); echo "FAIL  pnpm: failure message does not mention a duplicate"; }
+# pnpm 11+ lockfiles are two YAML documents: the packageManager pin, then the
+# lockfile proper. Strict parse only (no pnpm needed): both must be checked.
+pnpm11_lock() { # pnpm11_lock <dir>: prepend the pnpm 11+ pin document
+  { printf -- "---\nlockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    configDependencies: {}\n"
+    printf "    packageManagerDependencies:\n      pnpm:\n        specifier: 12.18.0\n        version: 12.18.0\n\n---\n"
+    cat "$1/pnpm-lock.yaml"; } >"$1/lock.new" && mv "$1/lock.new" "$1/pnpm-lock.yaml"
+}
+strict_only() { # strict_only <dir>: the strict step alone, as the push backstop runs it
+  (cd "$1" && PATH="$guard_path:$PATH" GUARD_PNPM=true bash "$work/step-strict.sh")
+}
+d="$(fresh pnpm-good)"; pnpm11_lock "$d"
+if strict_only "$d" >"$work/case.log" 2>&1; then
+  pass=$((pass + 1)); echo "ok    pnpm: multi-document (pnpm 11+) lockfile passes the strict parse"
+else
+  fail=$((fail + 1)); echo "FAIL  pnpm: multi-document (pnpm 11+) lockfile rejected"; sed 's/^/        | /' "$work/case.log"
+fi
+d="$(fresh pnpm-good)"; pnpm11_lock "$d"; dup_first_line_matching '^  ms@2\.1\.3:' "$d/pnpm-lock.yaml"
+case_ "pnpm: duplicate key in the lockfile document of a pnpm 11+ lockfile fails" fail strict "$d"
 # Second layer: even with the strict parse bypassed, pnpm itself rejects it.
 if need pnpm; then
   d="$(fresh pnpm-dup)"
