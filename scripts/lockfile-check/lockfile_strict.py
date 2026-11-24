@@ -67,14 +67,18 @@ def check_pnpm(path):
     if conflict_markers(path, text):
         return
     try:
-        root = yaml.compose(text, Loader=yaml.SafeLoader)
-        yaml.safe_load(text)
+        # pnpm 11+ writes its own packageManager pin as a separate YAML document
+        # ahead of the lockfile proper, so parse and check every document.
+        roots = [r for r in yaml.compose_all(text, Loader=yaml.SafeLoader) if r is not None]
+        for _ in yaml.safe_load_all(text):
+            pass
     except yaml.YAMLError as e:
         return fail(path, f"YAML parse error: {' '.join(str(e).split())}")
-    if root is None:
+    if not roots:
         return fail(path, "lockfile has no content")
     dups = []
-    yaml_duplicates(root, [], set(), dups)
+    for root in roots:
+        yaml_duplicates(root, [], set(), dups)
     for d in dups:
         fail(path, d)
     if not dups:
