@@ -5,7 +5,7 @@ name: Dependabot auto-merge (reusable)
 #
 #   jobs:
 #     automerge:
-#       uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@v1
+#       uses: lurking-walrus/gh-automation/.github/workflows/dependabot-auto-merge.yml@v1
 #       with:
 #         require-token: true
 #       secrets:
@@ -56,7 +56,7 @@ name: Dependabot auto-merge (reusable)
 # cancelled and its PR is simply left open (fail-safe). Re-run it or comment
 # `@dependabot rebase`. `recheck-before-merge: false` restores the old
 # `gh pr merge --auto` behaviour (no lock, no re-check).
-# See kornsour/gh-automation/README.md.
+# See lurking-walrus/gh-automation/README.md.
 
 on:
   workflow_call:
@@ -90,7 +90,7 @@ on:
         type: number
         default: 60
       tooling-ref:
-        description: "Ref of kornsour/gh-automation to fetch the shared lockfile-check script from. Empty = the ref the caller pinned this workflow to, else v1."
+        description: "Ref of lurking-walrus/gh-automation to fetch the shared lockfile-check script from. Empty = the ref the caller pinned this workflow to, else v1."
         type: string
         default: ""
     secrets:
@@ -166,10 +166,10 @@ jobs:
           if [ "$HAVE_TOKEN" = "true" ]; then
             echo "Merging with AUTOMERGE_TOKEN; the merge will trigger push workflows on main."
           elif [ "$REQUIRE_TOKEN" = "true" ]; then
-            echo "::error title=AUTOMERGE_TOKEN is not set::This repo requires a merge token so the Dependabot merge triggers its push workflows. Create a fine-grained PAT (Contents, Pull requests, Workflows: read/write on this repo) and store it as a Dependabot secret: gh secret set AUTOMERGE_TOKEN --app dependabot -R ${GITHUB_REPOSITORY}. See kornsour/gh-automation README."
+            echo "::error title=AUTOMERGE_TOKEN is not set::This repo requires a merge token so the Dependabot merge triggers its push workflows. Create a fine-grained PAT (Contents, Pull requests, Workflows: read/write on this repo) and store it as a Dependabot secret: gh secret set AUTOMERGE_TOKEN --app dependabot -R ${GITHUB_REPOSITORY}. See lurking-walrus/gh-automation README."
             exit 1
           else
-            echo "::warning title=Running with GITHUB_TOKEN (no AUTOMERGE_TOKEN)::This merge is made with GITHUB_TOKEN, so it will NOT trigger this repo's push workflows on main: no CI on main, no deploys or releases, and no push-to-main lockfile backstop. Store a fine-grained PAT or GitHub App token as the Dependabot secret AUTOMERGE_TOKEN; see kornsour/gh-automation README."
+            echo "::warning title=Running with GITHUB_TOKEN (no AUTOMERGE_TOKEN)::This merge is made with GITHUB_TOKEN, so it will NOT trigger this repo's push workflows on main: no CI on main, no deploys or releases, and no push-to-main lockfile backstop. Store a fine-grained PAT or GitHub App token as the Dependabot secret AUTOMERGE_TOKEN; see lurking-walrus/gh-automation README."
           fi
 
       # Legacy path (recheck-before-merge: false): hand the merge to GitHub.
@@ -282,7 +282,7 @@ jobs:
       # BEGIN shared tooling step (kept identical, apart from an `if:` line, in
       # lockfile-guard.yml and dependabot-auto-merge.yml; run-tests.sh enforces it)
       # The lockfile checks live in ONE script, scripts/lockfile-check/, in
-      # kornsour/gh-automation. A reusable workflow cannot see its own repo's
+      # lurking-walrus/gh-automation. A reusable workflow cannot see its own repo's
       # files, so fetch them — at the same ref the caller pinned this workflow
       # to (read from the caller's workflow file), or `tooling-ref` if given,
       # else v1. Plain git, outside the workspace; no extra action.
@@ -302,12 +302,12 @@ jobs:
           ref="${ref:-v1}"
           dir="${RUNNER_TEMP:?}/gh-automation-tooling"
           rm -rf "$dir" && git init --quiet "$dir"
-          git -C "$dir" fetch --quiet --depth 1 https://github.com/kornsour/gh-automation.git "$ref"
+          git -C "$dir" fetch --quiet --depth 1 https://github.com/lurking-walrus/gh-automation.git "$ref"
           git -C "$dir" checkout --quiet --detach FETCH_HEAD
           script="$dir/scripts/lockfile-check/lockfile-check.sh"
           [ -x "$script" ] || { echo "::error::gh-automation@$ref has no scripts/lockfile-check; set tooling-ref to a ref that does"; exit 1; }
           echo "LOCKFILE_CHECK=$script" >> "$GITHUB_ENV"
-          echo "Lockfile tooling: kornsour/gh-automation@$ref ($(git -C "$dir" rev-parse HEAD))"
+          echo "Lockfile tooling: lurking-walrus/gh-automation@$ref ($(git -C "$dir" rev-parse HEAD))"
       # END shared tooling step
 
       - name: Re-check lockfiles against the current base tip

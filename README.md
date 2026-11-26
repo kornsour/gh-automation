@@ -59,7 +59,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   ci:
-    uses: kornsour/gh-automation/.github/workflows/ci.yml@v1
+    uses: lurking-walrus/gh-automation/.github/workflows/ci.yml@v1
     with:
       node-version: "24"          # optional
       migration-check: true       # optional, for repos with src/db/schema.ts
@@ -89,7 +89,7 @@ permissions:
   pull-requests: write
 jobs:
   auto-merge:
-    uses: kornsour/gh-automation/.github/workflows/auto-merge.yml@<sha>
+    uses: lurking-walrus/gh-automation/.github/workflows/auto-merge.yml@<sha>
     with:
       require-token: true   # set where push workflows deploy or publish
     secrets:
@@ -124,7 +124,7 @@ permissions:
   pull-requests: write
 jobs:
   automerge:
-    uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@v1
+    uses: lurking-walrus/gh-automation/.github/workflows/dependabot-auto-merge.yml@v1
     with:
       require-token: true        # fail rather than merge with GITHUB_TOKEN
       # merge-majors: false      # optional; hold majors for manual review
@@ -155,7 +155,7 @@ real identity. One-time setup per consuming repo:
    runs as `dependabot[bot]`, which can only read Dependabot secrets:
 
    ```bash
-   gh secret set AUTOMERGE_TOKEN --app dependabot -R kornsour/<repo>
+   gh secret set AUTOMERGE_TOKEN --app dependabot -R lurking-walrus/<repo>
    ```
 
 Without the secret the workflow falls back to `GITHUB_TOKEN` and logs a
@@ -205,7 +205,7 @@ on:
   merge_group:        # only if the repo uses a merge queue
 jobs:
   lockfile:
-    uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@v1
+    uses: lurking-walrus/gh-automation/.github/workflows/lockfile-guard.yml@v1
     # with:             # all optional; existing callers need none of this
     #   working-directory: "."   # where the lockfile lives
     #   ecosystems: auto         # or "pnpm,uv"; a named ecosystem without its lockfile fails
@@ -298,7 +298,7 @@ on:
     branches: [main]
 jobs:
   lockfile:
-    uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@v1
+    uses: lurking-walrus/gh-automation/.github/workflows/lockfile-guard.yml@v1
     with:
       strict-only: true     # strict parse only: seconds, no installs
 ```
@@ -349,7 +349,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   ci:
-    uses: kornsour/gh-automation/.github/workflows/python-ci.yml@v1
+    uses: lurking-walrus/gh-automation/.github/workflows/python-ci.yml@v1
     with:
       python-version: "3.14"   # optional
       extras: "dev"            # optional
@@ -368,7 +368,7 @@ per GitHub's personal-account model:
 - `allow_auto_merge` enabled on the repo
 - an `AUTOMERGE_TOKEN` Dependabot secret (see `dependabot-auto-merge.yml`
   above; the one piece `rollout.sh` cannot do for you). Check with
-  `gh secret list --app dependabot -R kornsour/<repo>` — it must list
+  `gh secret list --app dependabot -R lurking-walrus/<repo>` — it must list
   `AUTOMERGE_TOKEN` (`gh secret list -R …` alone shows only Actions secrets)
 - a **repository ruleset** with the required status checks (matched to that
   repo's own CI check names + `lockfile / integrity`)
