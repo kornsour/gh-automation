@@ -112,7 +112,7 @@ permissions:
 
 jobs:
   automerge:
-    uses: kornsour/gh-automation/.github/workflows/dependabot-auto-merge.yml@$REF
+    uses: lurking-walrus/gh-automation/.github/workflows/dependabot-auto-merge.yml@$REF
     with:
       # Fail rather than fall back to GITHUB_TOKEN: a merge enabled with
       # GITHUB_TOKEN lands on main without triggering this repo's push
@@ -121,7 +121,7 @@ jobs:
     # No \`secrets: inherit\` — pass the one secret by name. AUTOMERGE_TOKEN is a
     # *Dependabot* secret (Settings > Secrets and variables > Dependabot); this
     # workflow runs as dependabot[bot], which cannot read Actions secrets.
-    # See kornsour/gh-automation README for the token's permissions.
+    # See lurking-walrus/gh-automation README for the token's permissions.
     secrets:
       AUTOMERGE_TOKEN: \${{ secrets.AUTOMERGE_TOKEN }}
 YAML
@@ -144,7 +144,7 @@ concurrency:
 
 jobs:
   lockfile:
-    uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@$REF
+    uses: lurking-walrus/gh-automation/.github/workflows/lockfile-guard.yml@$REF
 YAML
 
 	# dependabot.yml: detect the repo's ecosystems so the config is useful out of

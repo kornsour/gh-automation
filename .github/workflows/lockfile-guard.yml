@@ -12,7 +12,7 @@ name: Lockfile guard (reusable)
 #     merge_group:            # only if the repo uses a merge queue
 #   jobs:
 #     lockfile:
-#       uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@v1
+#       uses: lurking-walrus/gh-automation/.github/workflows/lockfile-guard.yml@v1
 #
 # The resulting required-check context is "lockfile / integrity".
 #
@@ -33,7 +33,7 @@ name: Lockfile guard (reusable)
 #       branches: [main]
 #   jobs:
 #     lockfile:
-#       uses: kornsour/gh-automation/.github/workflows/lockfile-guard.yml@v1
+#       uses: lurking-walrus/gh-automation/.github/workflows/lockfile-guard.yml@v1
 #       with:
 #         strict-only: true
 #
@@ -77,7 +77,7 @@ on:
         type: boolean
         default: false
       tooling-ref:
-        description: "Ref of kornsour/gh-automation to fetch the shared lockfile-check script from. Empty = the ref the caller pinned this workflow to, else v1."
+        description: "Ref of lurking-walrus/gh-automation to fetch the shared lockfile-check script from. Empty = the ref the caller pinned this workflow to, else v1."
         type: string
         default: ""
 
@@ -108,7 +108,7 @@ jobs:
       # BEGIN shared tooling step (kept identical, apart from an `if:` line, in
       # lockfile-guard.yml and dependabot-auto-merge.yml; run-tests.sh enforces it)
       # The lockfile checks live in ONE script, scripts/lockfile-check/, in
-      # kornsour/gh-automation. A reusable workflow cannot see its own repo's
+      # lurking-walrus/gh-automation. A reusable workflow cannot see its own repo's
       # files, so fetch them — at the same ref the caller pinned this workflow
       # to (read from the caller's workflow file), or `tooling-ref` if given,
       # else v1. Plain git, outside the workspace; no extra action.
@@ -127,12 +127,12 @@ jobs:
           ref="${ref:-v1}"
           dir="${RUNNER_TEMP:?}/gh-automation-tooling"
           rm -rf "$dir" && git init --quiet "$dir"
-          git -C "$dir" fetch --quiet --depth 1 https://github.com/kornsour/gh-automation.git "$ref"
+          git -C "$dir" fetch --quiet --depth 1 https://github.com/lurking-walrus/gh-automation.git "$ref"
           git -C "$dir" checkout --quiet --detach FETCH_HEAD
           script="$dir/scripts/lockfile-check/lockfile-check.sh"
           [ -x "$script" ] || { echo "::error::gh-automation@$ref has no scripts/lockfile-check; set tooling-ref to a ref that does"; exit 1; }
           echo "LOCKFILE_CHECK=$script" >> "$GITHUB_ENV"
-          echo "Lockfile tooling: kornsour/gh-automation@$ref ($(git -C "$dir" rev-parse HEAD))"
+          echo "Lockfile tooling: lurking-walrus/gh-automation@$ref ($(git -C "$dir" rev-parse HEAD))"
       # END shared tooling step
 
       # A PR is checked as GitHub's pre-computed merge ref, which can already

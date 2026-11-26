@@ -14,7 +14,7 @@ name: Auto-merge (reusable)
 #     pull-requests: write
 #   jobs:
 #     auto-merge:
-#       uses: kornsour/gh-automation/.github/workflows/auto-merge.yml@<sha>
+#       uses: lurking-walrus/gh-automation/.github/workflows/auto-merge.yml@<sha>
 #       secrets:
 #         AUTOMERGE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
 #
@@ -103,10 +103,10 @@ jobs:
           if [ "$HAVE_TOKEN" = "true" ]; then
             echo "Enabling auto-merge with AUTOMERGE_TOKEN; the merge will trigger push workflows on main."
           elif [ "$REQUIRE_TOKEN" = "true" ]; then
-            echo "::error title=AUTOMERGE_TOKEN is not set::This repo's push workflows deploy or publish, so auto-merge needs a token that triggers them. Merge this PR by hand, or add the secret: gh secret set AUTOMERGE_TOKEN -R ${GITHUB_REPOSITORY} (fine-grained PAT: Contents, Pull requests, Workflows read/write). See kornsour/gh-automation README."
+            echo "::error title=AUTOMERGE_TOKEN is not set::This repo's push workflows deploy or publish, so auto-merge needs a token that triggers them. Merge this PR by hand, or add the secret: gh secret set AUTOMERGE_TOKEN -R ${GITHUB_REPOSITORY} (fine-grained PAT: Contents, Pull requests, Workflows read/write). See lurking-walrus/gh-automation README."
             exit 1
           else
-            echo "::warning title=Running with GITHUB_TOKEN (no AUTOMERGE_TOKEN)::This PR will merge with GITHUB_TOKEN, so the merge will NOT trigger push workflows on main. Add an AUTOMERGE_TOKEN Actions secret to fix that; see kornsour/gh-automation README."
+            echo "::warning title=Running with GITHUB_TOKEN (no AUTOMERGE_TOKEN)::This PR will merge with GITHUB_TOKEN, so the merge will NOT trigger push workflows on main. Add an AUTOMERGE_TOKEN Actions secret to fix that; see lurking-walrus/gh-automation README."
           fi
 
       - name: Enable auto-merge
