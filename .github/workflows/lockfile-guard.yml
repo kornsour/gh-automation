@@ -122,7 +122,7 @@ jobs:
           ref="$TOOLING_REF"
           caller="${CALLER_WORKFLOW_REF#*/*/}"; caller="${caller%%@*}"
           if [ -z "$ref" ] && [ -f "$caller" ]; then
-            ref="$(grep -oE 'kornsour/gh-automation/\.github/workflows/[A-Za-z0-9_.-]+@[^[:space:]"#]+' "$caller" | head -n1 | sed 's/.*@//' || true)"
+            ref="$(grep -oiE '(kornsour|lurking-walrus)/gh-automation/\.github/workflows/[A-Za-z0-9_.-]+@[^[:space:]"#]+' "$caller" | head -n1 | sed 's/.*@//' || true)"
           fi
           ref="${ref:-v1}"
           dir="${RUNNER_TEMP:?}/gh-automation-tooling"
